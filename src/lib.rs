@@ -1,15 +1,16 @@
-pub mod stream_manager;
-pub mod services;
 pub mod api;
 pub mod config;
+pub mod services;
+pub mod stream_manager;
 
 // Re-export main components for easier use
 pub use stream_manager::{
-    StreamManager,
-    StreamSource, 
-    StreamType,
-    BranchType,
-    BranchConfig,
+    // BranchType,
+    // BranchConfig,
     StreamId,
-    BranchId
+    // BranchId
+    StreamManager,
+    StreamSource,
+    StreamType,
 };
+

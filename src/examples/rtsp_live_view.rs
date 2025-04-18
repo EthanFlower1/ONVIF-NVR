@@ -1,11 +1,12 @@
 use anyhow::Result;
 use gstreamer as gst;
-use std::collections::HashMap;
+use gstreamer::glib::object::ObjectExt;
+use gstreamer::prelude::{ElementExt, ElementExtManual, GstBinExtManual, PadExt};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use g_streamer::{BranchConfig, BranchType, StreamManager, StreamSource, StreamType};
+use g_streamer::{StreamManager, StreamSource, StreamType};
 
 // Import the tutorials_common module for macOS compatibility
 #[path = "../tutorial-common.rs"]
@@ -48,38 +49,34 @@ fn run_rtsp_live_view() -> Result<()> {
     let stream_id = stream_manager.add_stream(source)?;
     println!("Created stream with ID: {}", stream_id);
 
-    // // Create a timestamp-based filename for the recording
-    // let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    // let recording_path = format!("/tmp/recording_{}.mp4", timestamp);
-    //
-    // // Add a recording branch with higher quality settings
-    // let mut recording_options = HashMap::new();
-    // recording_options.insert("bitrate".to_string(), "2000".to_string());
-    // recording_options.insert("tune".to_string(), "film".to_string());
-    //
-    // let recording_config = BranchConfig {
-    //     branch_type: BranchType::Recording,
-    //     output_path: Some(recording_path.clone()),
-    //     options: recording_options,
-    // };
-    //
-    // let recording_branch_id = stream_manager.add_branch(&stream_id, recording_config)?;
-    // println!("Created recording branch with ID: {}", recording_branch_id);
-    // println!("Recording to: {}", recording_path);
-    //
-    // Add a live viewing branch with low-latency settings
-    let mut viewing_options = HashMap::new();
-    viewing_options.insert("sync".to_string(), "false".to_string()); // Disable sync for lower latency
+    let (pipeline, tee) = stream_manager.get_stream_access(&stream_id)?;
 
-    let viewing_config = BranchConfig {
-        branch_type: BranchType::LiveView,
-        output_path: None,
-        options: viewing_options,
-    };
+    let queue = gst::ElementFactory::make("queue").build()?;
+    queue.set_property("max-size-buffers", 3u32);
 
-    let viewing_branch_id = stream_manager.add_branch(&stream_id, viewing_config)?;
-    println!("Created live viewing branch with ID: {}", viewing_branch_id);
+    let depay = gst::ElementFactory::make("rtph264depay").build()?;
+    let parse = gst::ElementFactory::make("h264parse").build()?;
+    let decode = gst::ElementFactory::make("avdec_h264").build()?;
+    let convert = gst::ElementFactory::make("videoconvert").build()?;
+    let sink = gst::ElementFactory::make("osxvideosink").build()?;
 
+    sink.set_property("sync", false); // Don't sync to clock for lower latency
+
+    pipeline.add_many(&[&queue, &depay, &parse, &decode, &convert, &sink])?;
+
+    gst::Element::link_many(&[&queue, &depay, &parse, &decode, &convert, &sink])?;
+
+    let tee_src_pad = tee.request_pad_simple("src_%u").unwrap();
+
+    let queue_sink_pad = queue.static_pad("sink").unwrap();
+
+    tee_src_pad.link(&queue_sink_pad)?;
+
+    for element in [&queue, &depay, &parse, &decode, &convert, &sink] {
+        element.sync_state_with_parent()?;
+    }
+    // Explicitly set the pipeline state to PLAYING
+    pipeline.set_state(gst::State::Playing)?;
     // Create a signal handler for ctrl+c
     let running = Arc::new(std::sync::Mutex::new(true));
     let r = running.clone();
@@ -114,13 +111,6 @@ fn run_rtsp_live_view() -> Result<()> {
 
     // Clean up
     println!("\nStopping stream...");
-
-    // First remove branches
-    stream_manager.remove_branch(&stream_id, &viewing_branch_id)?;
-    println!("Removed viewing branch");
-
-    // stream_manager.remove_branch(&stream_id, &recording_branch_id)?;
-    // println!("Removed recording branch");
 
     // Then remove the stream
     stream_manager.remove_stream(&stream_id)?;
