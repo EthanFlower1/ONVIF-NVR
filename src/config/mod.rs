@@ -1,75 +1,197 @@
-use std::path::PathBuf;
-use std::fs;
-use anyhow::Result;
-use log::info;
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-// Simple configuration management
-// In a real application, this would be more comprehensive
+/// Top-level configuration
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Config {
+    pub api: ApiConfig,
+    pub onvif: OnvifConfig,
+    pub recording: RecordingConfig,
+    pub streaming: StreamingConfig,
+    pub database: DatabaseConfig,
+    pub security: SecurityConfig,
+}
 
-#[derive(Debug, Clone)]
-pub struct AppConfig {
-    pub data_dir: PathBuf,
-    pub recording_dir: PathBuf,
+/// API server configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ApiConfig {
+    /// API server address
+    pub address: String,
+    /// API server port
+    pub port: u16,
+    /// Log level (trace, debug, info, warn, error)
+    #[serde(default = "default_log_level")]
     pub log_level: String,
-    pub api_port: u16,
-    pub websocket_port: u16,
-    pub camera_settings: CameraSettings,
 }
 
-#[derive(Debug, Clone)]
-pub struct CameraSettings {
-    pub default_framerate: u32,
-    pub default_resolution: (u32, u32),
+fn default_log_level() -> String {
+    "info".to_string()
 }
 
-impl Default for AppConfig {
+fn default_buffer_size_mb() -> usize {
+    32 // Default to 32MB buffer capacity
+}
+
+fn default_buffer_duration() -> u64 {
+    10 // Default to 10 seconds of buffer
+}
+
+/// ONVIF service configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OnvifConfig {
+    /// ONVIF discovery broadcast address
+    pub discovery_address: String,
+    /// ONVIF discovery port
+    pub discovery_port: u16,
+    /// ONVIF discovery timeout (seconds)
+    pub discovery_timeout: u64,
+    /// Database pool for accessing camera information
+    #[serde(skip)]
+    pub db_pool: Option<Arc<sqlx::PgPool>>,
+}
+
+/// Recording service configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RecordingConfig {
+    /// Storage path for recordings
+    pub storage_path: PathBuf,
+    /// Maximum storage size in gigabytes
+    pub max_storage_gb: u64,
+    /// Default recording segment duration in seconds
+    pub segment_duration: u64,
+    /// Recording file format (mp4, mkv)
+    pub format: String,
+    /// Default retention period in days
+    pub retention_days: i32,
+}
+
+/// Streaming service configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StreamingConfig {
+    /// Multicast address range base
+    pub multicast_address_base: String,
+    /// Multicast port range start
+    pub multicast_port_start: u16,
+    /// Streaming buffer size in milliseconds
+    pub buffer_ms: u64,
+    /// Shared buffer capacity in megabytes
+    #[serde(default = "default_buffer_size_mb")]
+    pub buffer_size_mb: usize,
+    /// Shared buffer duration in seconds
+    #[serde(default = "default_buffer_duration")]
+    pub buffer_duration: u64,
+}
+
+/// Database configuration
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct DatabaseConfig {
+    /// Database URL
+    #[serde(default = "default_db_url")]
+    pub url: String,
+    /// Connection pool max size
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+    /// Automatic migration on startup
+    #[serde(default)]
+    pub auto_migrate: bool,
+}
+
+fn default_db_url() -> String {
+    "postgres://postgres:postgres@localhost:5432/gst-test".to_string()
+}
+
+fn default_max_connections() -> u32 {
+    5
+}
+
+/// Security configuration
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct SecurityConfig {
+    /// JWT secret key
+    #[serde(default = "default_jwt_secret")]
+    pub jwt_secret: String,
+    /// JWT token expiration time in minutes
+    #[serde(default = "default_jwt_expiration")]
+    pub jwt_expiration_minutes: u64,
+    /// Password hashing cost (higher is more secure but slower)
+    #[serde(default = "default_password_hash_cost")]
+    pub password_hash_cost: u32,
+}
+
+fn default_jwt_secret() -> String {
+    "default_secret_change_in_production".to_string()
+}
+
+fn default_jwt_expiration() -> u64 {
+    60 // 60 minutes
+}
+
+fn default_password_hash_cost() -> u32 {
+    10 // reasonable default for bcrypt
+}
+
+impl Default for Config {
     fn default() -> Self {
         Self {
-            data_dir: PathBuf::from("/tmp/g-streamer/data"),
-            recording_dir: PathBuf::from("/tmp/g-streamer/recordings"),
-            log_level: "info".to_string(),
-            api_port: 8080,
-            websocket_port: 8081,
-            camera_settings: CameraSettings {
-                default_framerate: 30,
-                default_resolution: (640, 480),
+            api: ApiConfig {
+                address: "0.0.0.0".to_string(),
+                port: 4750,
+                log_level: "info".to_string(),
+            },
+            onvif: OnvifConfig {
+                discovery_address: "239.255.255.250".to_string(),
+                discovery_port: 3702,
+                discovery_timeout: 3,
+                db_pool: None,
+            },
+            recording: RecordingConfig {
+                storage_path: PathBuf::from("./recordings"),
+                max_storage_gb: 500,
+                segment_duration: 600,
+                format: "mkv".to_string(), // Use MKV format by default for all recordings
+                retention_days: 30,
+            },
+            streaming: StreamingConfig {
+                multicast_address_base: "239.0.0.0".to_string(),
+                multicast_port_start: 5000,
+                buffer_ms: 500,
+                buffer_size_mb: 32,
+                buffer_duration: 10,
+            },
+            database: DatabaseConfig {
+                url: "postgres://postgres:postgres@localhost:5432/gst-test".to_string(),
+                max_connections: 5,
+                auto_migrate: true,
+            },
+            security: SecurityConfig {
+                jwt_secret: "change_this_to_a_secure_random_string_in_production".to_string(),
+                jwt_expiration_minutes: 60,
+                password_hash_cost: 10,
             },
         }
     }
 }
 
-impl AppConfig {
-    pub fn load_from_file(_path: &str) -> Result<Self> {
-        // In a real application, this would parse a config file
-        let config = Self::default();
-        
-        // Create directories if they don't exist
-        fs::create_dir_all(&config.data_dir)?;
-        fs::create_dir_all(&config.recording_dir)?;
-        
-        Ok(config)
-    }
-    
-    pub fn get_recording_path(&self, recording_id: &str) -> PathBuf {
-        self.recording_dir.join(format!("{}.mp4", recording_id))
+/// Load configuration from a file or use default
+pub fn load_config(config_path: Option<&Path>) -> Result<Config> {
+    match config_path {
+        Some(path) => {
+            let config_str = std::fs::read_to_string(path)
+                .context(format!("Failed to read config file: {:?}", path))?;
+
+            let config = if path.extension().map_or(false, |ext| ext == "json") {
+                serde_json::from_str(&config_str).context("Failed to parse JSON config")?
+            } else if path.extension().map_or(false, |ext| ext == "toml") {
+                toml::from_str(&config_str).context("Failed to parse TOML config")?
+            } else {
+                return Err(anyhow::anyhow!("Unsupported config file format"));
+            };
+
+            Ok(config)
+        }
+        None => Ok(Config::default()),
     }
 }
 
-pub fn setup_config() -> Result<AppConfig> {
-    // Look for config file in standard locations
-    let config_paths = vec![
-        "config.toml",
-        "/etc/g-streamer/config.toml",
-    ];
-    
-    for path in config_paths {
-        if let Ok(config) = AppConfig::load_from_file(path) {
-            info!("Loaded configuration from {}", path);
-            return Ok(config);
-        }
-    }
-    
-    // Fall back to default config
-    info!("Using default configuration");
-    Ok(AppConfig::default())
-}

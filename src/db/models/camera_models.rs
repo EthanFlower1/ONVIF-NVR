@@ -1,0 +1,66 @@
+use super::stream_models::{Stream, StreamReference};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+/// Camera model
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Camera {
+    pub id: Uuid,
+    pub name: String,
+    pub model: Option<String>,
+    pub manufacturer: Option<String>,
+    pub ip_address: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub onvif_endpoint: Option<String>,
+    pub status: String,
+    pub primary_stream_id: Option<Uuid>,
+    pub sub_stream_id: Option<Uuid>,
+    pub firmware_version: Option<String>,
+    pub serial_number: Option<String>,
+    pub hardware_id: Option<String>,
+    pub mac_address: Option<String>,
+
+    pub ptz_supported: Option<bool>,
+    pub audio_supported: Option<bool>,
+    pub analytics_supported: Option<bool>,
+
+    // Events support
+    pub events_supported: Option<serde_json::Value>,
+    pub event_notification_endpoint: Option<String>,
+    // Storage information
+    pub has_local_storage: Option<bool>,
+    pub storage_type: Option<String>,
+    pub storage_capacity_gb: Option<i32>,
+    pub storage_used_gb: Option<i32>,
+    pub retention_days: Option<i32>,
+    pub recording_mode: Option<String>,
+    // Analytics information
+    pub analytics_capabilities: Option<serde_json::Value>,
+    pub ai_processor_type: Option<String>,
+    pub ai_processor_model: Option<String>,
+    pub object_detection_supported: Option<bool>,
+    pub face_detection_supported: Option<bool>,
+    pub license_plate_recognition_supported: Option<bool>,
+    pub person_tracking_supported: Option<bool>,
+    pub line_crossing_supported: Option<bool>,
+    pub zone_intrusion_supported: Option<bool>,
+    pub object_classification_supported: Option<bool>,
+    pub behavior_analysis_supported: Option<bool>,
+    // Original fields (mapped to our new structure)
+    pub capabilities: Option<serde_json::Value>,
+    pub profiles: Option<serde_json::Value>,
+    pub last_updated: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub created_by: Uuid,
+}
+
+/// Helper struct for camera with streams
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraWithStreams {
+    pub camera: Camera,
+    pub streams: Vec<Stream>,
+    pub stream_references: Vec<StreamReference>,
+}
