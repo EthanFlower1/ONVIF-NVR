@@ -1,5 +1,5 @@
 -- Camera event settings table for storing configuration of event monitoring and recording
-CREATE TABLE IF NOT EXISTS camera_event_settings (
+CREATE TABLE IF NOT EXISTS event_settings (
     id UUID PRIMARY KEY,
     camera_id UUID NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -12,4 +12,3 @@ CREATE TABLE IF NOT EXISTS camera_event_settings (
     updated_at TIMESTAMPTZ NOT NULL,
     created_by UUID NOT NULL REFERENCES users(id)
 );
-

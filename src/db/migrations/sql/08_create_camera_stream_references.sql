@@ -1,8 +1,8 @@
 
-CREATE TABLE IF NOT EXISTS camera_stream_references (
+CREATE TABLE IF NOT EXISTS stream_references (
     id UUID PRIMARY KEY,
     camera_id UUID NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
-    stream_id UUID NOT NULL REFERENCES camera_streams(id) ON DELETE CASCADE,
+    stream_id UUID NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
     reference_type VARCHAR(50) NOT NULL, -- 'primary', 'sub', 'tertiary', 'lowres', 'mobile', 'analytics', etc.
     display_order INTEGER DEFAULT 0, -- For ordering streams in UI
     is_default BOOLEAN DEFAULT false,

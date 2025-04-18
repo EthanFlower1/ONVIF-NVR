@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Camera model
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Camera {
     pub id: Uuid,
     pub name: String,
@@ -58,7 +58,7 @@ pub struct Camera {
 }
 
 /// Helper struct for camera with streams
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct CameraWithStreams {
     pub camera: Camera,
     pub streams: Vec<Stream>,

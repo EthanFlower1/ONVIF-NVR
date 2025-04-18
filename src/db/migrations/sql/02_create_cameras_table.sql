@@ -54,15 +54,3 @@ CREATE TABLE IF NOT EXISTS cameras (
     created_by UUID NOT NULL REFERENCES users(id)
 );
 
--- 2. Create indices for the cameras table
-CREATE INDEX IF NOT EXISTS idx_cameras_name ON cameras(name);
-CREATE INDEX IF NOT EXISTS idx_cameras_ip ON cameras(ip_address);
-CREATE INDEX IF NOT EXISTS idx_cameras_status ON cameras(status);
-CREATE INDEX IF NOT EXISTS idx_cameras_ptz ON cameras(ptz_supported);
-CREATE INDEX IF NOT EXISTS idx_cameras_last_updated ON cameras(last_updated);
-
--- Additional indexes for new fields
-CREATE INDEX IF NOT EXISTS idx_cameras_analytics_supported ON cameras(analytics_supported);
-CREATE INDEX IF NOT EXISTS idx_cameras_has_local_storage ON cameras(has_local_storage);
-CREATE INDEX IF NOT EXISTS idx_cameras_object_detection ON cameras(object_detection_supported);
-CREATE INDEX IF NOT EXISTS idx_cameras_recording_mode ON cameras(recording_mode);

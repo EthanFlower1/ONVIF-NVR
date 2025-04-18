@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use super::recording_schedule_models::RecordingQuality;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct EventSettings {
     pub id: Uuid,
     pub camera_id: Uuid,

@@ -2,6 +2,7 @@
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
+
 -- 2. Create indices for the cameras table
 CREATE INDEX IF NOT EXISTS idx_cameras_name ON cameras(name);
 CREATE INDEX IF NOT EXISTS idx_cameras_ip ON cameras(ip_address);
@@ -33,17 +34,17 @@ CREATE INDEX IF NOT EXISTS idx_events_acknowledged ON events(acknowledged);
 CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity);
 
 --6.  Create indices for the camera_stream_references table
-CREATE INDEX IF NOT EXISTS idx_camera_streams_camera_id ON camera_streams(camera_id);
-CREATE INDEX IF NOT EXISTS idx_camera_streams_type ON camera_streams(stream_type);
-CREATE INDEX IF NOT EXISTS idx_camera_streams_active ON camera_streams(is_active);
-CREATE INDEX IF NOT EXISTS idx_camera_streams_primary ON camera_streams(is_primary);
+CREATE INDEX IF NOT EXISTS idx_streams_camera_id ON streams(camera_id);
+CREATE INDEX IF NOT EXISTS idx_streams_type ON streams(stream_type);
+CREATE INDEX IF NOT EXISTS idx_streams_active ON streams(is_active);
+CREATE INDEX IF NOT EXISTS idx_streams_primary ON streams(is_primary);
 
 --7.  Create indices for the camera_event_settings table
-CREATE INDEX IF NOT EXISTS idx_event_settings_camera ON camera_event_settings(camera_id);
-CREATE INDEX IF NOT EXISTS idx_event_settings_enabled ON camera_event_settings(enabled);
+CREATE INDEX IF NOT EXISTS idx_event_settings_camera ON event_settings(camera_id);
+CREATE INDEX IF NOT EXISTS idx_event_settings_enabled ON event_settings(enabled);
 
 --8.  Create indices for the camera_stream_references table
-CREATE INDEX IF NOT EXISTS idx_camera_stream_refs_camera_id ON camera_stream_references(camera_id);
-CREATE INDEX IF NOT EXISTS idx_camera_stream_refs_stream_id ON camera_stream_references(stream_id);
-CREATE INDEX IF NOT EXISTS idx_camera_stream_refs_type ON camera_stream_references(reference_type);
-CREATE INDEX IF NOT EXISTS idx_camera_stream_refs_default ON camera_stream_references(is_default);
+CREATE INDEX IF NOT EXISTS idx_stream_refs_camera_id ON stream_references(camera_id);
+CREATE INDEX IF NOT EXISTS idx_stream_refs_stream_id ON stream_references(stream_id);
+CREATE INDEX IF NOT EXISTS idx_stream_refs_type ON stream_references(reference_type);
+CREATE INDEX IF NOT EXISTS idx_stream_refs_default ON stream_references(is_default);

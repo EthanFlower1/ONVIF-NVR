@@ -1,5 +1,5 @@
 
-CREATE TABLE IF NOT EXISTS camera_streams (
+CREATE TABLE IF NOT EXISTS streams (
     id UUID PRIMARY KEY,
     camera_id UUID NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,

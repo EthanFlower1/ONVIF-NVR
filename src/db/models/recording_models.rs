@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 /// Recording model
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Recording {
     pub id: Uuid,
     pub camera_id: Uuid,
