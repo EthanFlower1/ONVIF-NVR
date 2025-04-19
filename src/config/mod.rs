@@ -99,7 +99,7 @@ pub struct DatabaseConfig {
 }
 
 fn default_db_url() -> String {
-    "postgres://postgres:postgres@localhost:5432/gst-test".to_string()
+    "postgres://postgres:postgres@localhost:5432/server".to_string()
 }
 
 fn default_max_connections() -> u32 {
@@ -161,7 +161,7 @@ impl Default for Config {
                 buffer_duration: 10,
             },
             database: DatabaseConfig {
-                url: "postgres://postgres:postgres@localhost:5432/gst-test".to_string(),
+                url: "postgres://postgres:postgres@localhost:5432/server".to_string(),
                 max_connections: 5,
                 auto_migrate: true,
             },

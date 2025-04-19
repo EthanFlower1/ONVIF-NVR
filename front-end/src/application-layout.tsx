@@ -1,5 +1,4 @@
-'use client'
-
+import React from 'react'
 import { Avatar } from './components/avatar'
 import {
   Dropdown,
@@ -131,9 +130,9 @@ export function ApplicationLayout({
                 <HomeIcon />
                 <SidebarLabel>Home</SidebarLabel>
               </SidebarItem>
-              <SidebarItem href="/events" current={pathname.startsWith('/events')}>
+              <SidebarItem href="/cameras" current={pathname.startsWith('/cameras')}>
                 <Square2StackIcon />
-                <SidebarLabel>Events</SidebarLabel>
+                <SidebarLabel>Cameras</SidebarLabel>
               </SidebarItem>
               <SidebarItem href="/orders" current={pathname.startsWith('/orders')}>
                 <TicketIcon />

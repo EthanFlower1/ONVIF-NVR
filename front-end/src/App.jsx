@@ -1,7 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './layout.tsx'
-import { AuthLayout } from './components/auth-layout.tsx'
 import Login from './pages/login.tsx'
+import Cameras from './pages/cameras.tsx'
 import './App.css'
 
 // Placeholder Home component
@@ -41,15 +41,16 @@ function App() {
     <Routes>
       {/* Auth routes */}
       <Route path="/login" element={
-          <Login />
+        <Login />
       } />
-      
+
       {/* Main application routes with Layout */}
       <Route path="/" element={<Layout><Home /></Layout>} />
       <Route path="/settings" element={<Layout><Settings /></Layout>} />
       <Route path="/events" element={<Layout><Events /></Layout>} />
+      <Route path="/cameras" element={<Layout><Cameras /></Layout>} />
       <Route path="/orders" element={<Layout><Orders /></Layout>} />
-      
+
       {/* Catch-all route - redirect to home */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -1,5 +1,4 @@
-use crate::error::Error;
-use crate::models::{CameraEventSettings, CameraEventSettingsDb};
+use crate::{db::models::event_settings_models::EventSettings, error::Error};
 use anyhow::Result;
 use chrono::Utc;
 use sqlx::PgPool;
@@ -9,27 +8,27 @@ use uuid::Uuid;
 
 /// Camera event settings repository for handling event settings operations
 #[derive(Clone)]
-pub struct CameraEventSettingsRepository {
+pub struct EventSettingsRepository {
     pool: Arc<PgPool>,
 }
 
-impl CameraEventSettingsRepository {
+impl EventSettingsRepository {
     /// Create a new camera event settings repository
     pub fn new(pool: Arc<PgPool>) -> Self {
         Self { pool }
     }
 
     /// Create new camera event settings
-    pub async fn create(&self, settings: &CameraEventSettings) -> Result<CameraEventSettings> {
+    pub async fn create(&self, settings: &EventSettings) -> Result<EventSettings> {
         info!(
             "Creating new camera event settings for camera: {}",
             settings.camera_id
         );
 
         // Convert to DB model
-        let settings_db = CameraEventSettingsDb::from(settings.clone());
+        let settings_db = EventSettings::from(settings.clone());
 
-        let result = sqlx::query_as::<_, CameraEventSettingsDb>(
+        let result = sqlx::query_as::<_, EventSettings>(
             r#"
             INSERT INTO camera_event_settings (
                 id, camera_id, enabled, event_types, event_topic_expressions,
@@ -58,12 +57,12 @@ impl CameraEventSettingsRepository {
         .map_err(|e| Error::Database(format!("Failed to create camera event settings: {}", e)))?;
 
         // Convert back to regular model
-        Ok(CameraEventSettings::from(result))
+        Ok(EventSettings::from(result))
     }
 
     /// Get settings by ID
-    pub async fn get_by_id(&self, id: &Uuid) -> Result<Option<CameraEventSettings>> {
-        let result = sqlx::query_as::<_, CameraEventSettingsDb>(
+    pub async fn get_by_id(&self, id: &Uuid) -> Result<Option<EventSettings>> {
+        let result = sqlx::query_as::<_, EventSettings>(
             r#"
             SELECT id, camera_id, enabled, event_types, event_topic_expressions,
                    trigger_recording, recording_duration, recording_quality, 
@@ -79,12 +78,12 @@ impl CameraEventSettingsRepository {
             Error::Database(format!("Failed to get camera event settings by ID: {}", e))
         })?;
 
-        Ok(result.map(CameraEventSettings::from))
+        Ok(result.map(EventSettings::from))
     }
 
     /// Get settings by camera ID
-    pub async fn get_by_camera_id(&self, camera_id: &Uuid) -> Result<Option<CameraEventSettings>> {
-        let result = sqlx::query_as::<_, CameraEventSettingsDb>(
+    pub async fn get_by_camera_id(&self, camera_id: &Uuid) -> Result<Option<EventSettings>> {
+        let result = sqlx::query_as::<_, EventSettings>(
             r#"
             SELECT id, camera_id, enabled, event_types, event_topic_expressions,
                    trigger_recording, recording_duration, recording_quality, 
@@ -103,15 +102,15 @@ impl CameraEventSettingsRepository {
             ))
         })?;
 
-        Ok(result.map(CameraEventSettings::from))
+        Ok(result.map(EventSettings::from))
     }
 
     /// Update settings
-    pub async fn update(&self, settings: &CameraEventSettings) -> Result<CameraEventSettings> {
+    pub async fn update(&self, settings: &EventSettings) -> Result<EventSettings> {
         // Convert to DB model
-        let settings_db = CameraEventSettingsDb::from(settings.clone());
+        let settings_db = EventSettings::from(settings.clone());
 
-        let result = sqlx::query_as::<_, CameraEventSettingsDb>(
+        let result = sqlx::query_as::<_, EventSettings>(
             r#"
             UPDATE camera_event_settings
             SET enabled = $1, event_types = $2, event_topic_expressions = $3,
@@ -135,7 +134,7 @@ impl CameraEventSettingsRepository {
         .await
         .map_err(|e| Error::Database(format!("Failed to update camera event settings: {}", e)))?;
 
-        Ok(CameraEventSettings::from(result))
+        Ok(EventSettings::from(result))
     }
 
     /// Delete settings
@@ -155,8 +154,8 @@ impl CameraEventSettingsRepository {
     }
 
     /// Get all enabled camera event settings
-    pub async fn get_all_enabled(&self) -> Result<Vec<CameraEventSettings>> {
-        let result = sqlx::query_as::<_, CameraEventSettingsDb>(
+    pub async fn get_all_enabled(&self) -> Result<Vec<EventSettings>> {
+        let result = sqlx::query_as::<_, EventSettings>(
             r#"
             SELECT id, camera_id, enabled, event_types, event_topic_expressions,
                    trigger_recording, recording_duration, recording_quality, 
@@ -174,7 +173,7 @@ impl CameraEventSettingsRepository {
             ))
         })?;
 
-        Ok(result.into_iter().map(CameraEventSettings::from).collect())
+        Ok(result.into_iter().map(EventSettings::from).collect())
     }
 }
 

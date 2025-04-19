@@ -2,6 +2,7 @@ use anyhow::Result;
 use gst::prelude::*;
 use gstreamer as gst;
 use log::info;
+use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 
 #[path = "./tutorial-common.rs"]
@@ -10,6 +11,7 @@ mod tutorials_common;
 mod api;
 mod config;
 mod db;
+mod device_manager;
 mod error;
 mod stream_manager;
 pub use error::Error;
@@ -25,22 +27,28 @@ async fn run_app() -> Result<()> {
     gst::init()?;
     info!("GStreamer initialized successfully");
 
+    let config = config::load_config(None)?;
+    info!("Configuration loaded");
     // Load configuration
     // let config = config::setup_config()?;
     // info!("Configuration loaded");
 
     // Create shared stream manager
-    let stream_manager = Arc::new(StreamManager::new());
+    let _stream_manager = Arc::new(StreamManager::new());
     info!("Stream manager initialized");
 
+    let db_pool = PgPoolOptions::new()
+        .max_connections(20)
+        .connect(&config.database.url)
+        .await?;
+
+    let db_pool = std::sync::Arc::new(db_pool);
+
     // Start API servers
-    // api::rest::setup_rest_api(
-    //     camera_manager.clone(),
-    //     recording_service.clone(),
-    //     streaming_service.clone(),
-    //     analytics_service.clone(),
-    // )
-    // .await?;
+    let http_server = api::rest::RestApi::new(&config.api, db_pool).unwrap();
+
+    let _ = http_server.run().await;
+
     //
     // let websocket_api = api::websocket::setup_websocket_api(
     //     camera_manager.clone(),
@@ -51,52 +59,6 @@ async fn run_app() -> Result<()> {
     // .await?;
     info!("API servers started");
 
-    // For demo purposes, add a sample camera
-    {
-        let mut camera_manager = camera_manager.lock().await;
-
-        // Variable to hold the active stream ID
-        let stream_id: String;
-
-        // First, try to use a real camera
-        let real_camera_id = add_real_camera(&mut camera_manager)?;
-
-        // If successful, use the real camera
-        if let Some(camera_id) = real_camera_id {
-            info!("Added real camera with ID: {}", camera_id);
-
-            // Start streaming from the camera
-            stream_id = camera_manager.start_camera_stream(&camera_id)?;
-            info!("Started real camera stream with ID: {}", stream_id);
-        } else {
-            // Fall back to a test source
-            info!("No real camera available, using test source");
-
-            let test_source = stream_manager::StreamSource {
-                stream_type: stream_manager::StreamType::TestSource,
-                uri: "0".to_string(), // Pattern 0 (SMPTE color bars)
-                name: "Test Source".to_string(),
-                description: Some("Fallback test pattern".to_string()),
-            };
-
-            stream_id = stream_manager.add_stream(test_source)?;
-            info!("Started test source stream with ID: {}", stream_id);
-        }
-
-        // Start recording using the active stream
-        let mut recording_service = recording_service.lock().await;
-        let recording_id =
-            recording_service.start_recording(services::recording::RecordingRequest {
-                stream_id: stream_id,
-                output_path: Some(config.recording_dir.to_string_lossy().to_string()),
-                duration: Some(60), // 60 seconds
-                quality: Some("medium".to_string()),
-            })?;
-        info!("Started sample recording with ID: {}", recording_id);
-    }
-
-    info!("G-Streamer Stream Management System running");
-
     // In a real application, we would wait for termination signals
     tokio::signal::ctrl_c().await?;
     info!("Shutting down...");
@@ -106,42 +68,29 @@ async fn run_app() -> Result<()> {
 
 // Helper function to try adding a real camera
 // Returns Some(camera_id) if successful, None if no camera is available
-fn add_real_camera(camera_manager: &mut CameraManager) -> Result<Option<String>> {
-    // Select appropriate camera device identifier based on platform
-    #[cfg(target_os = "linux")]
-    let device_path = "/dev/video0".to_string();
-
-    #[cfg(target_os = "macos")]
-    let device_path = "0".to_string(); // Use device index 0 for macOS
-
-    #[cfg(target_os = "windows")]
-    let device_path = "0".to_string(); // Use device index 0 for Windows
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    let device_path = "0".to_string(); // Default device
-
-    let camera_id = camera_manager.add_camera(
-        "Real Camera".to_string(),
-        device_path,
-        Some("Physical camera device".to_string()),
-    )?;
-
-    // Try to start the camera to see if it works
-    // Since we don't have a way to check if the camera is available before starting,
-    // we'll try to start it and see if it fails
-    match camera_manager.start_camera_stream(&camera_id) {
-        Ok(_) => {
-            // Camera started successfully, stop it for now
-            camera_manager.stop_camera_stream(&camera_id)?;
-            Ok(Some(camera_id))
-        }
-        Err(_) => {
-            // Camera failed to start, remove it
-            let _ = camera_manager.remove_camera(&camera_id);
-            Ok(None)
-        }
-    }
-}
+// fn add_real_camera(camera_manager: &mut CameraManager) -> Result<Option<String>> {
+//     #[cfg(target_os = "macos")]
+//     let device_path = "0".to_string(); // Use device index 0 for macOS
+//
+//     let camera_id = camera_manager.add_camera(
+//         "Real Camera".to_string(),
+//         device_path,
+//         Some("Physical camera device".to_string()),
+//     )?;
+//
+//     match camera_manager.start_camera_stream(&camera_id) {
+//         Ok(_) => {
+//             // Camera started successfully, stop it for now
+//             camera_manager.stop_camera_stream(&camera_id)?;
+//             Ok(Some(camera_id))
+//         }
+//         Err(_) => {
+//             // Camera failed to start, remove it
+//             let _ = camera_manager.remove_camera(&camera_id);
+//             Ok(None)
+//         }
+//     }
+// }
 
 fn main() {
     // For backward compatibility, we're using the tutorial_common's run wrapper

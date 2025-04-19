@@ -1,186 +1,217 @@
-// use crate::services::analytics::AnalyticsRequest;
-// use crate::services::recording::RecordingRequest;
-// use crate::services::streaming::StreamRequest;
-// use crate::services::{AnalyticsService, CameraManager, RecordingService, StreamingService};
-// use anyhow::{Result, Error};
-// use serde_json;
-// use std::sync::Arc;
-// use tokio::sync::Mutex;
-//
-// // Note: In a real application, this would use a proper HTTP server like warp, axum, or actix-web
-// // This is a simplified version for demonstration purposes
-//
-// pub struct RestApi {
-//     camera_manager: Arc<Mutex<CameraManager>>,
-//     recording_service: Arc<Mutex<RecordingService>>,
-//     streaming_service: Arc<Mutex<StreamingService>>,
-//     analytics_service: Arc<Mutex<AnalyticsService>>,
+use crate::db::repositories::cameras::CamerasRepository;
+use crate::device_manager;
+use crate::error::Error;
+use crate::{config::ApiConfig, db::models::camera_models::Camera};
+use anyhow::Result;
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::post,
+    Json, Router,
+};
+use log::info;
+use serde::Serialize;
+use sqlx::PgPool;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::net::TcpListener;
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
+use uuid::Uuid;
+
+// Shared application state
+#[derive(Clone)]
+pub struct AppState {
+    pub db_pool: Arc<PgPool>,
+}
+
+pub type ApiResult<T> = std::result::Result<T, ApiError>;
+
+#[derive(Debug, Serialize)]
+pub struct ApiError {
+    pub message: String,
+    pub status: u16,
+}
+
+impl From<Error> for ApiError {
+    fn from(err: Error) -> Self {
+        match err {
+            Error::Authentication(_) => ApiError {
+                message: err.to_string(),
+                status: StatusCode::UNAUTHORIZED.as_u16(),
+            },
+            Error::Authorization(_) => ApiError {
+                message: err.to_string(),
+                status: StatusCode::FORBIDDEN.as_u16(),
+            },
+            Error::NotFound(_) => ApiError {
+                message: err.to_string(),
+                status: StatusCode::NOT_FOUND.as_u16(),
+            },
+            Error::AlreadyExists(_) => ApiError {
+                message: err.to_string(),
+                status: StatusCode::CONFLICT.as_u16(),
+            },
+            Error::Onvif(_) | Error::Recording(_) | Error::Streaming(_) | Error::FFmpeg(_) => {
+                ApiError {
+                    message: err.to_string(),
+                    status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                }
+            }
+            Error::Config(_) => ApiError {
+                message: err.to_string(),
+                status: StatusCode::BAD_REQUEST.as_u16(),
+            },
+            _ => ApiError {
+                message: err.to_string(),
+                status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            },
+        }
+    }
+}
+
+impl From<anyhow::Error> for ApiError {
+    fn from(err: anyhow::Error) -> Self {
+        if let Some(err) = err.downcast_ref::<Error>() {
+            return (*err).clone().into();
+        }
+
+        ApiError {
+            message: err.to_string(),
+            status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+        }
+    }
+}
+
+/// Implement IntoResponse for ApiError
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let body = Json(self);
+        (status, body).into_response()
+    }
+}
+
+pub struct RestApi {
+    config: ApiConfig,
+    db_pool: Arc<PgPool>,
+}
+
+impl RestApi {
+    pub fn new(config: &ApiConfig, db_pool: Arc<PgPool>) -> Result<Self> {
+        Ok(Self {
+            config: config.clone(),
+            db_pool,
+        })
+    }
+
+    pub async fn run(&self) -> Result<()> {
+        let state = AppState {
+            db_pool: Arc::clone(&self.db_pool),
+        };
+
+        // Create a CORS layer that allows all origins and preflight requests
+        use std::time::Duration;
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+            .allow_credentials(false)
+            .max_age(Duration::from_secs(3600));
+
+        // Build the API router with routes
+        let app = Router::new()
+            // Auth routes
+            // .route("/api/auth/login", post(login))
+            // .route("/api/auth/register", post(register))
+            // .route("/api/auth/me", get(get_current_user))
+            // .route("/api/auth/users/:id/change-password", post(change_password))
+            // .route("/api/auth/users/:id/reset-password", post(reset_password))
+            // .route("/api/auth/users/:id/role", put(update_role))
+            // .route("/api/auth/users/:id/status", put(set_user_active))
+            // User routes
+            // .route("/api/users", get(get_all_users))
+            // .route("/api/users/:id", get(get_user_by_id))
+            // .route("/api/users/:id", delete(delete_user))
+            // Camera routes
+            // .route("/api/cameras", get(get_cameras))
+            // .route("/api/cameras", post(create_camera))
+            .route("/api/cameras/discover", post(discover_cameras))
+            // .route("/api/cameras/:id", get(get_camera_by_id))
+            // .route("/api/cameras/:id", put(update_camera))
+            // .route("/api/cameras/:id", delete(delete_camera))
+            // .route("/api/cameras/:id/status", put(update_camera_status))
+            // .route("/api/cameras/:id/refresh", post(refresh_camera_details))
+            // .route("/api/cameras/:id/streams", get(get_camera_streams))
+            // Schedule routes
+            // .route("/api/schedules", get(get_schedules))
+            // .route("/api/schedules", post(create_schedule))
+            // .route("/api/schedules/:id", get(get_schedule_by_id))
+            // .route("/api/schedules/:id", put(update_schedule))
+            // .route("/api/schedules/:id", delete(delete_schedule))
+            // .route("/api/schedules/:id/status", put(set_schedule_enabled))
+            // .route("/api/cameras/:id/schedules", get(get_schedules_by_camera))
+            // Recording routes
+            // .route("/api/recordings", get(search_recordings))
+            // .route("/api/recordings/:id", get(get_recording_by_id))
+            // .route("/api/recordings/:id", delete(delete_recording))
+            // .route("/api/recordings/:id/stream", get(stream_recording))
+            // .route("/api/recordings/:id/download", get(download_recording))
+            // .route("/api/cameras/:id/recordings", get(get_recordings_by_camera))
+            // Regular routes with AppState
+            .with_state(state)
+            // Add WebSocket routes separately with their own state
+            // Serve static files from the public directory
+            .nest_service("/", ServeDir::new("public"))
+            // Apply CORS middleware to all routes
+            .layer(cors);
+
+        // Build the server address
+        let addr = self.config.address.clone() + ":" + &self.config.port.to_string();
+        let addr: SocketAddr = addr.parse()?;
+
+        // Log that we're starting
+        info!("API server listening on {}", addr);
+
+        // Create a listener and start the server
+        let listener = TcpListener::bind(addr).await?;
+
+        // Start serving (using axum's Server method)
+        axum::Server::from_tcp(listener.into_std()?)?
+            .serve(app.into_make_service())
+            .await?;
+
+        Ok(())
+    }
+}
+
+// async fn get_cameras(State(state): State<AppState>) -> ApiResult<Json<Vec<Camera>>> {
+//     let repo = CamerasRepository::new(Arc::clone(&state.db_pool));
+//     let cameras = repo.get_all().await?;
+//     Ok(Json(cameras))
 // }
-//
-// impl RestApi {
-//     pub fn new(
-//         camera_manager: Arc<Mutex<CameraManager>>,
-//         recording_service: Arc<Mutex<RecordingService>>,
-//         streaming_service: Arc<Mutex<StreamingService>>,
-//         analytics_service: Arc<Mutex<AnalyticsService>>,
-//     ) -> Self {
-//         Self {
-//             camera_manager,
-//             recording_service,
-//             streaming_service,
-//             analytics_service,
-//         }
-//     }
-//
-//     // Camera management endpoints
-//
-//     pub async fn add_camera(
-//         &self,
-//         name: String,
-//         device_path: String,
-//         description: Option<String>,
-//     ) -> Result<String> {
-//         let mut camera_manager = self.camera_manager.lock().await;
-//         camera_manager.add_camera(name, device_path, description)
-//     }
-//
-//     pub async fn remove_camera(&self, camera_id: String) -> Result<()> {
-//         let mut camera_manager = self.camera_manager.lock().await;
-//         camera_manager.remove_camera(&camera_id)
-//     }
-//
-//     pub async fn list_cameras(&self) -> Result<Vec<serde_json::Value>> {
-//         let camera_manager = self.camera_manager.lock().await;
-//         let cameras = camera_manager.list_cameras();
-//
-//         // In a real application, you would serialize to proper JSON
-//         let result = cameras
-//             .iter()
-//             .map(|c| {
-//                 serde_json::json!({
-//                     "id": c.id,
-//                     "name": c.name,
-//                     "device_path": c.device_path,
-//                     "description": c.description,
-//                     "streaming": c.stream_id.is_some(),
-//                 })
-//             })
-//             .collect();
-//
-//         Ok(result)
-//     }
-//
-//     pub async fn start_camera_stream(&self, camera_id: String) -> Result<String> {
-//         let mut camera_manager = self.camera_manager.lock().await;
-//         camera_manager.start_camera_stream(&camera_id)
-//     }
-//
-//     pub async fn stop_camera_stream(&self, camera_id: String) -> Result<()> {
-//         let mut camera_manager = self.camera_manager.lock().await;
-//         camera_manager.stop_camera_stream(&camera_id)
-//     }
-//
-//     // Recording endpoints
-//
-//     pub async fn start_recording(&self, request: RecordingRequest) -> Result<String> {
-//         let mut recording_service = self.recording_service.lock().await;
-//         recording_service.start_recording(request)
-//     }
-//
-//     pub async fn stop_recording(&self, recording_id: String) -> Result<()> {
-//         let mut recording_service = self.recording_service.lock().await;
-//         recording_service.stop_recording(&recording_id)
-//     }
-//
-//     pub async fn list_recordings(&self) -> Result<Vec<serde_json::Value>> {
-//         let recording_service = self.recording_service.lock().await;
-//         let recordings = recording_service.list_recordings();
-//
-//         // In a real application, you would serialize to proper JSON
-//         let result = recordings
-//             .iter()
-//             .map(|r| {
-//                 serde_json::json!({
-//                     "id": r.id,
-//                     "stream_id": r.stream_id,
-//                     "output_path": r.output_path,
-//                     "start_time": r.start_time.elapsed().unwrap_or_default().as_secs(),
-//                     "status": format!("{:?}", r.status),
-//                 })
-//             })
-//             .collect();
-//
-//         Ok(result)
-//     }
-//
-//     // Live streaming endpoints
-//
-//     pub async fn start_stream(&self, request: StreamRequest) -> Result<String> {
-//         let mut streaming_service = self.streaming_service.lock().await;
-//         streaming_service.start_stream(request)
-//     }
-//
-//     pub async fn stop_stream(&self, stream_id: String) -> Result<()> {
-//         let mut streaming_service = self.streaming_service.lock().await;
-//         streaming_service.stop_stream(&stream_id)
-//     }
-//
-//     // Analytics endpoints
-//
-//     pub async fn start_analytics(&self, request: AnalyticsRequest) -> Result<String> {
-//         let mut analytics_service = self.analytics_service.lock().await;
-//         analytics_service.start_analytics(request)
-//     }
-//
-//     pub async fn stop_analytics(&self, analytics_id: String) -> Result<()> {
-//         let mut analytics_service = self.analytics_service.lock().await;
-//         analytics_service.stop_analytics(&analytics_id)
-//     }
-//
-//     pub async fn get_analytics_results(&self, analytics_id: String) -> Result<Vec<String>> {
-//         let analytics_service = self.analytics_service.lock().await;
-//         analytics_service.get_analytics_results(&analytics_id)
-//     }
-// }
-//
-// pub async fn setup_rest_api(
-//     camera_manager: Arc<Mutex<CameraManager>>,
-//     recording_service: Arc<Mutex<RecordingService>>,
-//     streaming_service: Arc<Mutex<StreamingService>>,
-//     analytics_service: Arc<Mutex<AnalyticsService>>,
-// ) -> Result<()> {
-//     let _rest_api = RestApi::new(
-//         camera_manager,
-//         recording_service,
-//         streaming_service,
-//         analytics_service,
-//     );
-//
-//     // In a real application, you would set up routes for a web framework here
-//     // For example, with warp:
-//     /*
-//     let api = warp::path("api")
-//         .and(
-//             // Camera routes
-//             warp::path("cameras")
-//                 .and(warp::post())
-//                 .and(warp::body::json())
-//                 .and(with_rest_api(rest_api.clone()))
-//                 .and_then(add_camera_handler)
-//                 .or(warp::path("cameras")
-//                     .and(warp::get())
-//                     .and(with_rest_api(rest_api.clone()))
-//                     .and_then(list_cameras_handler))
-//                 .or(warp::path!("cameras" / String)
-//                     .and(warp::delete())
-//                     .and(with_rest_api(rest_api.clone()))
-//                     .and_then(remove_camera_handler))
-//             // ... and so on for all other routes
-//         );
-//
-//     warp::serve(api).run(([127, 0, 0, 1], 3030)).await;
-//     */
-//
-//     Ok(())
-// }
-//
+
+async fn discover_cameras(State(state): State<AppState>) -> ApiResult<Json<Vec<Camera>>> {
+    info!("Starting camera discovery");
+
+    // Discover cameras on the network without requiring database
+    let discovered_cameras = device_manager::discovery::discover().await?;
+    info!("Discovered {} cameras", discovered_cameras.len());
+
+    // Return the discovered cameras directly without saving to the database
+    Ok(Json(discovered_cameras))
+}
+
+async fn get_camera_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<Camera>> {
+    let repo = CamerasRepository::new(Arc::clone(&state.db_pool));
+    let camera = repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
+        message: format!("Camera not found: {}", id),
+        status: StatusCode::NOT_FOUND.as_u16(),
+    })?;
+
+    Ok(Json(camera))
+}
