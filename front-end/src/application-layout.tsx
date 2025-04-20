@@ -130,6 +130,10 @@ export function ApplicationLayout({
                 <HomeIcon />
                 <SidebarLabel>Home</SidebarLabel>
               </SidebarItem>
+              <SidebarItem href="/discovery" current={pathname.startsWith('/discovery')}>
+                <Square2StackIcon />
+                <SidebarLabel>Discovery</SidebarLabel>
+              </SidebarItem>
               <SidebarItem href="/cameras" current={pathname.startsWith('/cameras')}>
                 <Square2StackIcon />
                 <SidebarLabel>Cameras</SidebarLabel>

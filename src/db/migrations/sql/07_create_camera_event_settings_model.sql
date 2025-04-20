@@ -9,6 +9,5 @@ CREATE TABLE IF NOT EXISTS event_settings (
     recording_duration BIGINT NOT NULL DEFAULT 60, -- Duration to record in seconds when event triggered
     recording_quality recording_quality NOT NULL DEFAULT 'medium',
     created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    created_by UUID NOT NULL REFERENCES users(id)
+    updated_at TIMESTAMPTZ NOT NULL
 );

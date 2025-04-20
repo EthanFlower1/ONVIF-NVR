@@ -23,6 +23,17 @@ sqlx = { version = "0.8.5", features = ["runtime-tokio", "postgres", "chrono", "
 tracing = "0.1.41"
 bcrypt = "0.17.0"
 toml = "0.8.20"
+onvif = { git = "https://github.com/lumeohq/onvif-rs" }
+schema = { package = "schema", git = "https://github.com/lumeohq/onvif-rs" }
+devicemgmt = { package = "devicemgmt", git = "https://github.com/lumeohq/onvif-rs" }
+media = { package = "media", git = "https://github.com/lumeohq/onvif-rs" }
+transport = { package = "transport", git = "https://github.com/lumeohq/onvif-rs" }
+futures = "0.3"
+futures-util = "0.3"
+axum = { version = "0.6", features = ["ws"] }
+axum-extra = "0.7"
+tower-http = { version = "0.4", features = ["cors", "auth", "fs"] }
+url = "2.5.4"
 
 [[example]]
 name = "simple_stream"

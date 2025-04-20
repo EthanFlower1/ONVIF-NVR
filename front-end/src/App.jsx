@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './layout.tsx'
 import Login from './pages/login.tsx'
 import Cameras from './pages/cameras.tsx'
+import DeviceDiscovery from './pages/discovery.tsx'
 import './App.css'
 
 // Placeholder Home component
@@ -49,6 +50,7 @@ function App() {
       <Route path="/settings" element={<Layout><Settings /></Layout>} />
       <Route path="/events" element={<Layout><Events /></Layout>} />
       <Route path="/cameras" element={<Layout><Cameras /></Layout>} />
+      <Route path="/discovery" element={<Layout><DeviceDiscovery /></Layout>} />
       <Route path="/orders" element={<Layout><Orders /></Layout>} />
 
       {/* Catch-all route - redirect to home */}

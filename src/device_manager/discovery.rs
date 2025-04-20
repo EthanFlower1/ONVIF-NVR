@@ -54,15 +54,8 @@ async fn process_discovered_device(device: discovery::Device) -> Result<Camera, 
     let mut camera = Camera::default();
 
     // Extract IP address
-
     camera.ip_address = device.urls[0].host().unwrap().to_string();
     camera.name = device.name.unwrap();
-
-    info!("Name: {}", &camera.name);
-    info!("Address: {}", &device.address);
-    info!("Types: {:?}", device.types);
-    info!("URLS: {:?}", device.urls);
-    // Try to connect to the device without auth
 
     Ok(camera)
 }

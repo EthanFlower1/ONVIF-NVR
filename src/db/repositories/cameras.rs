@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::{
     db::models::{
         camera_models::{Camera, CameraWithStreams},
-        stream_models::{Stream, StreamReference},
+        stream_models::{ReferenceType, Stream, StreamReference},
     },
     Error,
 };
@@ -29,7 +29,6 @@ impl CamerasRepository {
     pub async fn create_with_streams(
         &self,
         camera_data: &CameraWithStreams,
-        created_by: &Uuid,
     ) -> Result<CameraWithStreams, anyhow::Error> {
         info!(
             "Creating new camera with streams: {}",
@@ -46,8 +45,7 @@ impl CamerasRepository {
         // Prepare camera data
         let mut camera_db = camera_data.camera.clone();
 
-        // Ensure created_by, created_at, and updated_at are set
-        camera_db.created_by = *created_by;
+        // Ensure created_at, and updated_at are set
         camera_db.created_at = Utc::now();
         camera_db.updated_at = Utc::now();
 
@@ -68,11 +66,11 @@ impl CamerasRepository {
                 line_crossing_supported, zone_intrusion_supported,
                 object_classification_supported, behavior_analysis_supported,
                 capabilities, profiles, last_updated, 
-                created_at, updated_at, created_by
+                created_at, updated_at
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 
                    $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-                   $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43)
+                   $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42)
             RETURNING *
             "#,
         )
@@ -118,7 +116,6 @@ impl CamerasRepository {
         .bind(camera_db.last_updated)
         .bind(camera_db.created_at)
         .bind(camera_db.updated_at)
-        .bind(camera_db.created_by)
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| Error::Database(format!("Failed to create camera: {}", e)))?;
@@ -140,7 +137,7 @@ impl CamerasRepository {
 
             let stream_result = sqlx::query_as::<_, Stream>(
                 r#"
-                INSERT INTO camera_streams (
+                INSERT INTO streams (
                     id, camera_id, name, stream_type, url, 
                     resolution, width, height, codec, profile, level,
                     framerate, bitrate, variable_bitrate, keyframe_interval,
@@ -210,13 +207,13 @@ impl CamerasRepository {
                 ref_db.stream_id = streams[stream_index].id;
 
                 // Track sub stream ID if this is a sub stream reference
-                if reference_data.reference_type == "sub" {
+                if reference_data.reference_type == ReferenceType::Sub {
                     sub_stream_id = Some(ref_db.stream_id);
                 }
 
                 let ref_result = sqlx::query_as::<_, StreamReference>(
                     r#"
-                INSERT INTO camera_stream_references (
+                INSERT INTO stream_references (
                     id, camera_id, stream_id, reference_type, 
                     display_order, is_default, created_at, updated_at
                 )
@@ -227,7 +224,7 @@ impl CamerasRepository {
                 .bind(ref_db.id)
                 .bind(ref_db.camera_id)
                 .bind(ref_db.stream_id)
-                .bind(&ref_db.reference_type)
+                .bind(&ref_db.reference_type.to_string())
                 .bind(ref_db.display_order)
                 .bind(ref_db.is_default)
                 .bind(ref_db.created_at)
@@ -268,6 +265,7 @@ impl CamerasRepository {
             .await
             .map_err(|e| Error::Database(format!("Failed to commit transaction: {}", e)))?;
 
+        info!("Successfully created camera with streams");
         // Return the created camera with streams - This was inside the loop, but should be outside
         Ok(CameraWithStreams {
             camera: camera_result,
@@ -299,7 +297,7 @@ impl CamerasRepository {
         // Get all streams for this camera
         let streams = sqlx::query_as::<_, Stream>(
             r#"
-            SELECT * FROM camera_streams
+            SELECT * FROM streams
             WHERE camera_id = $1
             "#,
         )
@@ -311,7 +309,7 @@ impl CamerasRepository {
         // Get all stream references for this camera
         let stream_references = sqlx::query_as::<_, StreamReference>(
             r#"
-            SELECT * FROM camera_stream_references
+            SELECT * FROM stream_references
             WHERE camera_id = $1
             ORDER BY display_order
             "#,
@@ -528,7 +526,7 @@ impl CamerasRepository {
 
             // Check if stream exists
             let existing_stream =
-                sqlx::query_as::<_, Stream>("SELECT * FROM camera_streams WHERE id = $1")
+                sqlx::query_as::<_, Stream>("SELECT * FROM streams WHERE id = $1")
                     .bind(stream_db.id)
                     .fetch_optional(&mut *tx)
                     .await
@@ -540,7 +538,7 @@ impl CamerasRepository {
                 // Update existing stream
                 sqlx::query_as::<_, Stream>(
                     r#"
-                    UPDATE camera_streams
+                    UPDATE streams
                     SET name = $1, stream_type = $2, url = $3, resolution = $4, 
                         width = $5, height = $6, codec = $7, profile = $8, level = $9,
                         framerate = $10, bitrate = $11, variable_bitrate = $12,
@@ -588,7 +586,7 @@ impl CamerasRepository {
                 stream_db.created_at = Utc::now();
                 sqlx::query_as::<_, Stream>(
                     r#"
-                    INSERT INTO camera_streams (
+                    INSERT INTO streams (
                         id, camera_id, name, stream_type, url, 
                         resolution, width, height, codec, profile, level,
                         framerate, bitrate, variable_bitrate, keyframe_interval,
@@ -647,7 +645,7 @@ impl CamerasRepository {
 
             // Check if reference exists
             let existing_ref = sqlx::query_as::<_, StreamReference>(
-                "SELECT * FROM camera_stream_references WHERE id = $1",
+                "SELECT * FROM stream_references WHERE id = $1",
             )
             .bind(ref_db.id)
             .fetch_optional(&mut *tx)
@@ -658,7 +656,7 @@ impl CamerasRepository {
                 // Update existing reference
                 sqlx::query_as::<_, StreamReference>(
                     r#"
-                    UPDATE camera_stream_references
+                    UPDATE stream_references
                     SET stream_id = $1, reference_type = $2, display_order = $3,
                         is_default = $4, updated_at = $5
                     WHERE id = $6 AND camera_id = $7
@@ -666,7 +664,7 @@ impl CamerasRepository {
                     "#,
                 )
                 .bind(ref_db.stream_id)
-                .bind(&ref_db.reference_type)
+                .bind(&ref_db.reference_type.to_string())
                 .bind(ref_db.display_order)
                 .bind(ref_db.is_default)
                 .bind(ref_db.updated_at)
@@ -680,7 +678,7 @@ impl CamerasRepository {
                 ref_db.created_at = Utc::now();
                 sqlx::query_as::<_, StreamReference>(
                     r#"
-                    INSERT INTO camera_stream_references (
+                    INSERT INTO stream_references (
                         id, camera_id, stream_id, reference_type, 
                         display_order, is_default, created_at, updated_at
                     )
@@ -691,7 +689,7 @@ impl CamerasRepository {
                 .bind(ref_db.id)
                 .bind(ref_db.camera_id)
                 .bind(ref_db.stream_id)
-                .bind(&ref_db.reference_type)
+                .bind(&ref_db.reference_type.to_string())
                 .bind(ref_db.display_order)
                 .bind(ref_db.is_default)
                 .bind(ref_db.created_at)
@@ -712,7 +710,7 @@ impl CamerasRepository {
 
         let sub_stream_ref = updated_references
             .iter()
-            .find(|r| r.reference_type == "sub");
+            .find(|r| r.reference_type == ReferenceType::Sub);
         let sub_stream_id = sub_stream_ref.map(|r| r.stream_id);
 
         if primary_stream_id != camera_result.primary_stream_id
@@ -761,7 +759,7 @@ impl CamerasRepository {
         // Delete stream references
         sqlx::query(
             r#"
-            DELETE FROM camera_stream_references
+            DELETE FROM stream_references
             WHERE camera_id = $1
             "#,
         )
@@ -775,7 +773,7 @@ impl CamerasRepository {
         // Delete streams
         sqlx::query(
             r#"
-            DELETE FROM camera_streams
+            DELETE FROM streams
             WHERE camera_id = $1
             "#,
         )
@@ -823,6 +821,8 @@ impl CamerasRepository {
     pub async fn get_all_with_streams(&self) -> Result<Vec<CameraWithStreams>> {
         // Get all cameras
         let cameras = self.get_all().await?;
+
+        info!("Got cameras {}", cameras.len());
 
         // For each camera, get streams and references
         let mut result = Vec::new();
@@ -885,10 +885,10 @@ impl CamerasRepository {
     }
 
     /// Get camera streams
-    pub async fn get_camera_streams(&self, camera_id: &Uuid) -> Result<Vec<Stream>> {
+    pub async fn get_streams(&self, camera_id: &Uuid) -> Result<Vec<Stream>> {
         let result = sqlx::query_as::<_, Stream>(
             r#"
-            SELECT * FROM camera_streams
+            SELECT * FROM streams
             WHERE camera_id = $1
             "#,
         )
@@ -904,7 +904,7 @@ impl CamerasRepository {
     pub async fn get_stream_by_id(&self, stream_id: &Uuid) -> Result<Option<Stream>> {
         let result = sqlx::query_as::<_, Stream>(
             r#"
-            SELECT * FROM camera_streams
+            SELECT * FROM streams
             WHERE id = $1
             "#,
         )
@@ -924,7 +924,7 @@ impl CamerasRepository {
 
         let result = sqlx::query_as::<_, Stream>(
             r#"
-            UPDATE camera_streams
+            UPDATE streams
             SET name = $1, stream_type = $2, url = $3, resolution = $4, 
                 width = $5, height = $6, codec = $7, profile = $8, level = $9,
                 framerate = $10, bitrate = $11, variable_bitrate = $12,
@@ -983,7 +983,7 @@ impl CamerasRepository {
         // Delete stream references first
         sqlx::query(
             r#"
-            DELETE FROM camera_stream_references
+            DELETE FROM stream_references
             WHERE stream_id = $1
             "#,
         )
@@ -995,7 +995,7 @@ impl CamerasRepository {
         // Delete stream
         let result = sqlx::query(
             r#"
-            DELETE FROM camera_streams
+            DELETE FROM streams
             WHERE id = $1
             "#,
         )
@@ -1016,7 +1016,7 @@ impl CamerasRepository {
     pub async fn update_stream_status(&self, stream_id: &Uuid, is_active: bool) -> Result<()> {
         sqlx::query(
             r#"
-            UPDATE camera_streams
+            UPDATE streams
             SET is_active = $1, updated_at = $2
             WHERE id = $3
             "#,

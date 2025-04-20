@@ -50,7 +50,5 @@ CREATE TABLE IF NOT EXISTS cameras (
     profiles JSONB,
     last_updated TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    created_by UUID NOT NULL REFERENCES users(id)
+    updated_at TIMESTAMPTZ NOT NULL
 );
-

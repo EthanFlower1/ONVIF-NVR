@@ -54,7 +54,6 @@ pub struct Camera {
     pub last_updated: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub created_by: Uuid,
 }
 impl Camera {
     pub(crate) fn default() -> Camera {
@@ -101,7 +100,6 @@ impl Camera {
             last_updated: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
-            created_by: Uuid::nil(), // System user ID
         }
     }
 }

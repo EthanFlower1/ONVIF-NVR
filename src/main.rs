@@ -1,4 +1,5 @@
 use anyhow::Result;
+use db::migrations;
 use gst::prelude::*;
 use gstreamer as gst;
 use log::info;
@@ -42,6 +43,20 @@ async fn run_app() -> Result<()> {
         .connect(&config.database.url)
         .await?;
 
+    info!("Running migration...");
+    match migrations::run_migrations(&db_pool).await {
+        Ok(_) => {
+            log::info!("Migrations completed successfully");
+        }
+        Err(err) => {
+            log::error!("Failed to run migrations: {}", err);
+            // You might want to panic or return the error depending on your application needs
+            // panic!("Migration failed: {}", err);
+            // Or return the error if this is inside a function
+            // return Err(err.into());
+        }
+    }
+    //
     let db_pool = std::sync::Arc::new(db_pool);
 
     // Start API servers
@@ -152,4 +167,3 @@ fn tutorial_main() {
         .set_state(gst::State::Null)
         .expect("Unable to set the pipeline to the `Null` state");
 }
-

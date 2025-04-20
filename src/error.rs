@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::device_manager::onvif_client::OnvifError;
+
 #[derive(Error, Debug, Clone)]
 pub enum Error {
     #[error("API error: {0}")]

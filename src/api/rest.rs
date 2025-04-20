@@ -1,8 +1,12 @@
+use crate::db::models::camera_models::CameraWithStreams;
+use crate::db::models::stream_models::{ReferenceType, Stream, StreamReference, StreamType};
 use crate::db::repositories::cameras::CamerasRepository;
 use crate::device_manager;
+use crate::device_manager::onvif_client::{OnvifCameraBuilder, OnvifError};
 use crate::error::Error;
 use crate::{config::ApiConfig, db::models::camera_models::Camera};
 use anyhow::Result;
+use axum::routing::get;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -10,8 +14,9 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use chrono::Utc;
 use log::info;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -24,6 +29,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct AppState {
     pub db_pool: Arc<PgPool>,
+    pub cameras_repo: Arc<CamerasRepository>,
 }
 
 pub type ApiResult<T> = std::result::Result<T, ApiError>;
@@ -32,6 +38,20 @@ pub type ApiResult<T> = std::result::Result<T, ApiError>;
 pub struct ApiError {
     pub message: String,
     pub status: u16,
+}
+
+impl From<OnvifError> for ApiError {
+    fn from(err: OnvifError) -> Self {
+        ApiError {
+            message: err.to_string(),
+            status: StatusCode::UNAUTHORIZED.as_u16(),
+        }
+    }
+}
+impl From<OnvifError> for Error {
+    fn from(err: OnvifError) -> Self {
+        Error::Onvif(err.0)
+    }
 }
 
 impl From<Error> for ApiError {
@@ -109,6 +129,7 @@ impl RestApi {
     pub async fn run(&self) -> Result<()> {
         let state = AppState {
             db_pool: Arc::clone(&self.db_pool),
+            cameras_repo: Arc::new(CamerasRepository::new(self.db_pool.clone())),
         };
 
         // Create a CORS layer that allows all origins and preflight requests
@@ -135,9 +156,10 @@ impl RestApi {
             // .route("/api/users/:id", get(get_user_by_id))
             // .route("/api/users/:id", delete(delete_user))
             // Camera routes
-            // .route("/api/cameras", get(get_cameras))
+            .route("/api/cameras", get(get_cameras))
             // .route("/api/cameras", post(create_camera))
             .route("/api/cameras/discover", post(discover_cameras))
+            .route("/api/cameras/connect", post(camera_connect))
             // .route("/api/cameras/:id", get(get_camera_by_id))
             // .route("/api/cameras/:id", put(update_camera))
             // .route("/api/cameras/:id", delete(delete_camera))
@@ -201,6 +223,108 @@ async fn discover_cameras(State(state): State<AppState>) -> ApiResult<Json<Vec<C
 
     // Return the discovered cameras directly without saving to the database
     Ok(Json(discovered_cameras))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraConnectRequest {
+    pub username: String,
+    pub password: String,
+    pub ip_address: String,
+}
+async fn camera_connect(
+    State(state): State<AppState>,
+    Json(req): Json<CameraConnectRequest>,
+) -> ApiResult<Json<CameraWithStreams>> {
+    info!("Connection to Camera");
+    let mut camera = Camera::default();
+    camera.username = Some(req.username.clone());
+    camera.password = Some(req.password.clone());
+
+    let client = OnvifCameraBuilder::new()
+        .uri(&format!("http://{}", &req.ip_address))?
+        .credentials(&req.username, &req.password)
+        .service_path("onvif/device_service")
+        .fix_time(true)
+        .auth_type("digest")
+        .build()
+        .await?;
+
+    let device_info = client.get_device_information().await?;
+    camera.manufacturer = Some(device_info.manufacturer);
+    camera.model = Some(device_info.model);
+    camera.ip_address = req.ip_address;
+    camera.firmware_version = Some(device_info.firmware_version);
+    camera.serial_number = Some(device_info.serial_number);
+    camera.hardware_id = Some(device_info.hardware_id);
+
+    let stream_uris = client.get_stream_uris().await?;
+    let mut streams: Vec<Stream> = vec![];
+    let mut stream_references: Vec<StreamReference> = vec![];
+
+    for (i, stream_response) in stream_uris.iter().enumerate() {
+        let now = Utc::now();
+        let mut stream = Stream::default();
+        if let Some((width, height)) = stream_response.video_resolution {
+            stream.width = Some(width as i32);
+            stream.height = Some(height as i32);
+        }
+        stream.camera_id = camera.id;
+        stream.name = stream_response.name.clone();
+        stream.url = stream_response.uri.clone();
+        stream.codec = stream_response.video_encoding.clone();
+        stream.framerate = stream_response.framerate.map(|value| value as i32);
+        stream.bitrate = stream_response.bitrate.map(|value| value as i32);
+        stream.audio_bitrate = stream_response.audio_bitrate.map(|value| value as i32);
+        stream.audio_sample_rate = stream_response.audio_samplerate.map(|value| value as i32);
+        stream.audio_codec = stream_response.audio_encoding.clone();
+        stream.stream_type = StreamType::Rtsp;
+        stream.is_active = Some(false);
+        stream.is_primary = Some(i == 0);
+        stream.updated_at = now;
+        stream.created_at = now;
+
+        let stream_ref = StreamReference {
+            id: Uuid::new_v4(),
+            camera_id: camera.id,
+            stream_id: stream.id,
+            reference_type: match i {
+                0 => ReferenceType::Primary,
+                1 => ReferenceType::Sub,
+                2 => ReferenceType::Tertiary,
+                3 => ReferenceType::Lowres,
+                4 => ReferenceType::Mobile,
+                5 => ReferenceType::Analytics,
+                _ => ReferenceType::Unknown, // Default for any index beyond 5
+            },
+            display_order: Some(i as i32),
+            is_default: Some(i == 0),
+            created_at: now,
+            updated_at: now,
+        };
+
+        streams.push(stream);
+        stream_references.push(stream_ref);
+    }
+
+    let camera_with_streams = CameraWithStreams {
+        camera,
+        streams,
+        stream_references,
+    };
+
+    let db_response = state
+        .cameras_repo
+        .create_with_streams(&camera_with_streams)
+        .await?;
+
+    Ok(Json(db_response))
+}
+
+async fn get_cameras(State(state): State<AppState>) -> ApiResult<Json<Vec<Camera>>> {
+    info!("Getting cameras with streams...");
+    let cameras = state.cameras_repo.get_all().await?;
+
+    Ok(Json(cameras))
 }
 
 async fn get_camera_by_id(

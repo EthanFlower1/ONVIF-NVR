@@ -5,9 +5,10 @@ use sqlx::{Executor, PgPool};
 use tracing::{info, warn};
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
-    let migrations_dir = "./sql";
+    let migrations_dir = "/Users/ethanflower/projects/g-streamer/src/db/migrations/sql";
 
     // Get all SQL files from the directory
+    info!("Gathering all migration files...");
     let mut entries = fs::read_dir(migrations_dir)?
         .filter_map(Result::ok)
         .filter(|entry| {
@@ -17,6 +18,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Err
         .map(|entry| entry.path())
         .collect::<Vec<_>>();
 
+    info!("Files collectiong: {:?}", entries);
     // Custom sorting logic to handle special files
     entries.sort_by(|a, b| {
         let a_name = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -58,6 +60,7 @@ async fn execute_migration_file(
     let sql = fs::read_to_string(path)?;
 
     // Execute the SQL script
+    info!("Executing migration: {:?}", path.file_name());
     pool.execute(&*sql).await?;
 
     Ok(())
@@ -96,4 +99,3 @@ async fn create_default_admin(pool: &PgPool) -> Result<()> {
 
     Ok(())
 }
-
