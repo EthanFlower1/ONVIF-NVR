@@ -45,29 +45,62 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
   const peerConnectionReadyRef = useRef<boolean>(false);
   const mountedRef = useRef<boolean>(false);
 
-  // Cleanup function to close connections properly
+  // Enhanced cleanup function to close connections properly
   const cleanup = () => {
     console.log('Cleaning up WebRTC connections');
 
+    // First, stop stats interval 
     if (statsIntervalRef.current) {
       clearInterval(statsIntervalRef.current);
       statsIntervalRef.current = null;
     }
 
-    // Important: Close peer connection before notifying server
+    // Gather information about what's being cleaned up
+    const hasActivePC = !!peerConnectionRef.current;
+    const sessionId = sessionIdRef.current;
+
+    // Important: Stop tracks and close peer connection before notifying server
     if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
+      console.log('Closing peer connection and cleaning up tracks');
+
+      try {
+        // Get all senders and stop their tracks first
+        const senders = peerConnectionRef.current.getSenders();
+        senders.forEach(sender => {
+          if (sender.track) {
+            console.log(`Stopping track: ${sender.track.kind}`);
+            sender.track.stop();
+          }
+        });
+
+        // Close the RTCPeerConnection
+        peerConnectionRef.current.close();
+      } catch (err) {
+        console.warn('Error during peer connection cleanup:', err);
+      }
+
       peerConnectionRef.current = null;
     }
 
     // Now notify server *after* closing local connection
-    if (sessionIdRef.current) {
-      console.log(`Explicitly closing session ${sessionIdRef.current} on server`);
-      fetch(`${serverUrl}/webrtc/close/${sessionIdRef.current}`, {
+    if (sessionId) {
+      console.log(`Explicitly closing session ${sessionId} on server`);
+
+      // Use a more robust approach for cleanup
+      fetch(`${serverUrl}/webrtc/close/${sessionId}`, {
         method: 'GET',
         // Add timeout to prevent hanging requests
-        signal: AbortSignal.timeout(2000)
-      }).catch(error => console.error('Failed to close session, but continuing cleanup:', error));
+        signal: AbortSignal.timeout(3000)
+      })
+        .then(response => {
+          if (response.ok) {
+            console.log(`Successfully closed session ${sessionId} on server`);
+          } else {
+            console.warn(`Server returned ${response.status} when closing session ${sessionId}`);
+          }
+        })
+        .catch(error => console.error('Failed to close session, but continuing cleanup:', error));
+
       sessionIdRef.current = null;
     }
 
@@ -79,12 +112,35 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
 
     // Clear video and audio elements
     if (videoRef.current) {
+      if (videoRef.current.srcObject) {
+        // Stop all tracks from the srcObject
+        const stream = videoRef.current.srcObject as MediaStream;
+        if (stream) {
+          stream.getTracks().forEach(track => {
+            console.log(`Stopping video track: ${track.kind}`);
+            track.stop();
+          });
+        }
+      }
       videoRef.current.srcObject = null;
     }
 
     if (audioRef.current) {
+      if (audioRef.current.srcObject) {
+        // Stop all tracks from the srcObject
+        const stream = audioRef.current.srcObject as MediaStream;
+        if (stream) {
+          stream.getTracks().forEach(track => {
+            console.log(`Stopping audio track: ${track.kind}`);
+            track.stop();
+          });
+        }
+      }
       audioRef.current.srcObject = null;
     }
+
+    // Report cleanup status
+    console.log(`Cleanup complete. Had active connection: ${hasActivePC}, Session ID: ${sessionId || 'none'}`);
   };
 
   const updateStats = async () => {
@@ -147,10 +203,13 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
 
   // Function to send ICE candidates
   const sendIceCandidate = async (candidate: RTCIceCandidate) => {
-    if (!sessionIdRef.current) return;
+    if (!sessionIdRef.current) {
+      console.error('Cannot send ICE candidate: No session ID');
+      return false;
+    }
 
     try {
-      await fetch(`${serverUrl}/webrtc/ice`, {
+      const response = await fetch(`${serverUrl}/webrtc/ice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -160,7 +219,34 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
           sdp_mline_index: candidate.sdpMLineIndex
         })
       });
-      console.log('ICE candidate sent to server');
+
+      if (!response.ok) {
+        console.error(`ICE candidate send failed with status: ${response.status}`);
+        return false;
+      }
+
+      const data = await response.json();
+      if (!data.success) {
+        console.error('Server rejected ICE candidate:', data.message || data.error);
+
+        // If the peer connection wasn't found, this means we need to reconnect
+        if (data.error === 'peer_connection_not_found') {
+          console.warn('Server reports peer connection not found, reconnecting...');
+
+          // Schedule a reconnect if the component is still mounted
+          if (mountedRef.current) {
+            cleanup();
+            setTimeout(() => {
+              if (mountedRef.current) {
+                connect();
+              }
+            }, 1000);
+          }
+        }
+        return false;
+      }
+
+      console.log('ICE candidate successfully sent to server');
     } catch (error) {
       console.error('Failed to send ICE candidate:', error);
       return false;
@@ -185,32 +271,49 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
     }
   };
 
-  // Also update the connect function to ensure we handle the connection correctly
+  // Enhanced connect function to ensure we handle the connection correctly with better error handling
   const connect = async () => {
+    // Clear any existing connection
+    cleanup();
 
     // Add a small delay after cleanup to ensure server has processed the cleanup
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 500));
 
     if (!mountedRef.current) return;
 
     try {
       setStatus('Connecting...');
 
+      // Setup connection timeout to prevent hanging in "Connecting..." state
+      const connectionTimeout = setTimeout(() => {
+        if (mountedRef.current && status === 'Connecting...') {
+          console.warn('Connection attempt timed out after 15 seconds');
+          setStatus('Connection Failed (timeout)');
+          cleanup();
+        }
+      }, 15000);
+
       // Step 1: Create a WebRTC session
-      console.log(`Creating session for stream ${streamId}`);
+      console.log(`Creating session for stream ${streamId} at ${new Date().toISOString()}`);
       const sessionResponse = await fetch(`${serverUrl}/webrtc/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stream_id: streamId })
+        body: JSON.stringify({ stream_id: streamId }),
+        // Add timeout to prevent hanging requests
+        signal: AbortSignal.timeout(5000)
       });
 
       if (!sessionResponse.ok) {
         const errorText = await sessionResponse.text();
         console.error('Session response not OK:', sessionResponse.status, errorText);
+        clearTimeout(connectionTimeout);
         throw new Error(`Failed to create session: ${sessionResponse.status}`);
       }
 
-      if (!mountedRef.current) return; // Check if still mounted
+      if (!mountedRef.current) {
+        clearTimeout(connectionTimeout);
+        return; // Check if still mounted
+      }
 
       const sessionData = await sessionResponse.json();
       console.log('Session created:', sessionData.session_id);
@@ -362,13 +465,29 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
       const offerResponse = await fetch(`${serverUrl}/webrtc/offer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(offerPayload)
+        body: JSON.stringify(offerPayload),
+        // Add timeout to prevent hanging requests
+        signal: AbortSignal.timeout(8000)
       });
+
+      // Clear the connection timeout since we got a response
+      clearTimeout(connectionTimeout);
 
       if (!offerResponse.ok) {
         const errorText = await offerResponse.text();
         console.error('Offer response not OK:', offerResponse.status, errorText);
-        throw new Error('Failed to send offer');
+
+        // Log detailed error information for debugging
+        console.warn(`Offer failed with status: ${offerResponse.status}, text: ${errorText}`);
+
+        if (offerResponse.status === 500) {
+          // Server error - likely an issue with the pipeline setup
+          setStatus('Server Error');
+        } else {
+          setStatus(`Error (${offerResponse.status})`);
+        }
+
+        throw new Error(`Failed to send offer: ${offerResponse.status}`);
       }
 
       if (!mountedRef.current) return; // Check if still mounted
