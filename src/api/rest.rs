@@ -1,9 +1,14 @@
+use crate::api::webrtc::{
+    add_ice_candidate, close_webrtc_session, create_webrtc_session, process_webrtc_offer,
+    WebRTCState,
+};
 use crate::db::models::camera_models::CameraWithStreams;
 use crate::db::models::stream_models::{ReferenceType, Stream, StreamReference, StreamType};
 use crate::db::repositories::cameras::CamerasRepository;
 use crate::device_manager;
 use crate::device_manager::onvif_client::{OnvifCameraBuilder, OnvifError};
 use crate::error::Error;
+use crate::stream_manager::StreamManager;
 use crate::{config::ApiConfig, db::models::camera_models::Camera};
 use anyhow::Result;
 use axum::routing::get;
@@ -30,6 +35,7 @@ use uuid::Uuid;
 pub struct AppState {
     pub db_pool: Arc<PgPool>,
     pub cameras_repo: Arc<CamerasRepository>,
+    pub stream_manager: Arc<StreamManager>,
 }
 
 pub type ApiResult<T> = std::result::Result<T, ApiError>;
@@ -116,13 +122,19 @@ impl IntoResponse for ApiError {
 pub struct RestApi {
     config: ApiConfig,
     db_pool: Arc<PgPool>,
+    stream_manager: Arc<StreamManager>,
 }
 
 impl RestApi {
-    pub fn new(config: &ApiConfig, db_pool: Arc<PgPool>) -> Result<Self> {
+    pub fn new(
+        config: &ApiConfig,
+        db_pool: Arc<PgPool>,
+        stream_manager: Arc<StreamManager>,
+    ) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
             db_pool,
+            stream_manager,
         })
     }
 
@@ -130,7 +142,13 @@ impl RestApi {
         let state = AppState {
             db_pool: Arc::clone(&self.db_pool),
             cameras_repo: Arc::new(CamerasRepository::new(self.db_pool.clone())),
+            stream_manager: self.stream_manager.clone(),
         };
+
+        let webrtc_state = Arc::new(WebRTCState::new(
+            Arc::clone(&self.db_pool),
+            Arc::clone(&self.stream_manager),
+        ));
 
         // Create a CORS layer that allows all origins and preflight requests
         use std::time::Duration;
@@ -183,6 +201,16 @@ impl RestApi {
             // .route("/api/cameras/:id/recordings", get(get_recordings_by_camera))
             // Regular routes with AppState
             .with_state(state)
+            // Add WebRTC routes with their own state
+            .nest(
+                "/webrtc",
+                Router::new()
+                    .route("/session", post(create_webrtc_session))
+                    .route("/offer", post(process_webrtc_offer))
+                    .route("/ice", post(add_ice_candidate))
+                    .route("/close/:session_id", get(close_webrtc_session))
+                    .with_state(webrtc_state),
+            )
             // Add WebSocket routes separately with their own state
             // Serve static files from the public directory
             .nest_service("/", ServeDir::new("public"))
@@ -320,9 +348,9 @@ async fn camera_connect(
     Ok(Json(db_response))
 }
 
-async fn get_cameras(State(state): State<AppState>) -> ApiResult<Json<Vec<Camera>>> {
+async fn get_cameras(State(state): State<AppState>) -> ApiResult<Json<Vec<CameraWithStreams>>> {
     info!("Getting cameras with streams...");
-    let cameras = state.cameras_repo.get_all().await?;
+    let cameras = state.cameras_repo.get_all_with_streams().await?;
 
     Ok(Json(cameras))
 }

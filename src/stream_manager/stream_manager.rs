@@ -1,18 +1,14 @@
+use crate::db::models::stream_models::StreamType;
+use crate::db::repositories::cameras::CamerasRepository;
 use anyhow::{anyhow, Result};
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use log::{info, warn};
+use sqlx::PgPool;
 use std::collections::HashMap;
-use std::sync::RwLock;
-use uuid::Uuid;
+use std::sync::{Arc, RwLock};
 
 pub type StreamId = String;
-
-// Stream types supported by our system
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StreamType {
-    RTSP,       // RTSP video streams
-    TestSource, // Test video pattern for development
-}
 
 // Source configuration for a stream
 #[derive(Debug, Clone)]
@@ -33,21 +29,75 @@ struct Stream {
 /// StreamManager: Core class that manages video streams and their branches
 pub struct StreamManager {
     streams: RwLock<HashMap<StreamId, Stream>>,
+    db_pool: Arc<PgPool>,
 }
 
 impl StreamManager {
     /// Create a new StreamManager
-    pub fn new() -> Self {
+    pub fn new(db_pool: Arc<PgPool>) -> Self {
         Self {
             streams: RwLock::new(HashMap::new()),
+            db_pool,
         }
     }
 
-    /// Add a new stream from the given source
-    pub fn add_stream(&self, source: StreamSource) -> Result<StreamId> {
-        // Generate a unique ID for this stream
-        let stream_id = Uuid::new_v4().to_string();
+    pub async fn connect(&self) -> Result<i32> {
+        let cameras_with_streams = CamerasRepository::new(self.db_pool.clone())
+            .get_all_with_streams()
+            .await?;
 
+        for camera_with_streams in cameras_with_streams.iter() {
+            let username = camera_with_streams
+                .camera
+                .username
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Camera username is missing"))?;
+            let password = camera_with_streams
+                .camera
+                .password
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Camera password is missing"))?;
+
+            for stream in camera_with_streams.streams.iter() {
+                // Parse the original URL to insert username and password
+                let stream_uri = stream.url.to_string();
+
+                // Check if URL already contains credentials
+                let auth_uri = if stream_uri.contains('@') {
+                    // URL already has credentials, use as is
+                    stream_uri
+                } else {
+                    // URL doesn't have credentials, add them
+                    if stream_uri.starts_with("rtsp://") {
+                        format!("rtsp://{}:{}@{}", username, password, &stream_uri[7..])
+                    } else {
+                        // Handle non-RTSP URLs or malformed URLs
+                        warn!("Invalid RTSP URL format: {}", stream_uri);
+                        stream_uri
+                    }
+                };
+
+                info!("Connecting to camera URL: {}", auth_uri.clone());
+
+                let source = StreamSource {
+                    stream_type: stream.stream_type,
+                    uri: auth_uri,
+                    name: stream.name.clone(),
+                    description: Some("RTSP stream".to_string()),
+                };
+
+                let stream_id = self.add_stream(source, stream.id.to_string())?;
+                println!("Created stream with ID: {}", stream_id);
+            }
+        }
+
+        // Convert to i32 without needing to borrow
+        let count: i32 = cameras_with_streams.len().try_into().unwrap();
+        Ok(count)
+    }
+
+    /// Add a new stream from the given source
+    pub fn add_stream(&self, source: StreamSource, stream_id: String) -> Result<StreamId> {
         // Initialize GStreamer if not already done
         if gst::init().is_err() {
             gst::init()?;
@@ -55,14 +105,13 @@ impl StreamManager {
 
         // Create a pipeline string based on the stream type
         let pipeline_str = match source.stream_type {
-            StreamType::RTSP => {
+            StreamType::Rtsp => {
                 // Create a minimal pipeline for RTSP sources
                 format!("rtspsrc location={} latency=200 ! tee name=t", source.uri)
             }
-            StreamType::TestSource => {
-                // Create a minimal pipeline for test patterns
-                let pattern = source.uri.parse::<u32>().unwrap_or(0);
-                format!("videotestsrc pattern={} ! tee name=t", pattern)
+            _ => {
+                // Default pipeline - RTSP is the only type for now, but this handles any type
+                format!("rtspsrc location={} latency=200 ! tee name=t", source.uri)
             }
         };
         println!("Creating pipeline: {}", pipeline_str);
@@ -141,11 +190,5 @@ impl StreamManager {
             .iter()
             .map(|(id, stream)| (id.clone(), stream.source.clone()))
             .collect()
-    }
-}
-
-impl Default for StreamManager {
-    fn default() -> Self {
-        Self::new()
     }
 }

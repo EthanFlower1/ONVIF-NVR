@@ -1,9 +1,9 @@
 use anyhow::Result;
-use db::migrations;
+use db::{migrations, repositories::cameras::CamerasRepository};
 use gst::prelude::*;
 use gstreamer as gst;
 use log::info;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::Arc;
 
 #[path = "./tutorial-common.rs"]
@@ -35,35 +35,33 @@ async fn run_app() -> Result<()> {
     // info!("Configuration loaded");
 
     // Create shared stream manager
-    let _stream_manager = Arc::new(StreamManager::new());
-    info!("Stream manager initialized");
 
     let db_pool = PgPoolOptions::new()
         .max_connections(20)
         .connect(&config.database.url)
         .await?;
 
-    info!("Running migration...");
     match migrations::run_migrations(&db_pool).await {
         Ok(_) => {
             log::info!("Migrations completed successfully");
         }
         Err(err) => {
             log::error!("Failed to run migrations: {}", err);
-            // You might want to panic or return the error depending on your application needs
-            // panic!("Migration failed: {}", err);
-            // Or return the error if this is inside a function
-            // return Err(err.into());
         }
     }
-    //
+
     let db_pool = std::sync::Arc::new(db_pool);
 
-    // Start API servers
-    let http_server = api::rest::RestApi::new(&config.api, db_pool).unwrap();
+    let stream_manager = Arc::new(StreamManager::new(db_pool.clone()));
+    let connected_cameras = &stream_manager.connect().await?;
+    info!(
+        "Stream manager initialized, Connected Cameras: {}",
+        connected_cameras
+    );
+
+    let http_server = api::rest::RestApi::new(&config.api, db_pool, stream_manager).unwrap();
 
     let _ = http_server.run().await;
-
     //
     // let websocket_api = api::websocket::setup_websocket_api(
     //     camera_manager.clone(),

@@ -3,6 +3,7 @@ import Layout from './layout.tsx'
 import Login from './pages/login.tsx'
 import Cameras from './pages/cameras.tsx'
 import DeviceDiscovery from './pages/discovery.tsx'
+import Liveview from './pages/live-view.tsx'
 import './App.css'
 
 // Placeholder Home component
@@ -46,7 +47,7 @@ function App() {
       } />
 
       {/* Main application routes with Layout */}
-      <Route path="/" element={<Layout><Home /></Layout>} />
+      <Route path="/" element={<Layout><Liveview /></Layout>} />
       <Route path="/settings" element={<Layout><Settings /></Layout>} />
       <Route path="/events" element={<Layout><Events /></Layout>} />
       <Route path="/cameras" element={<Layout><Cameras /></Layout>} />
