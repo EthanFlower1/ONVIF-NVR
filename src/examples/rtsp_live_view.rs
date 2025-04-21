@@ -37,6 +37,7 @@ fn run_rtsp_live_view() -> Result<()> {
         default_url.to_string()
     };
 
+    let stream_manager = Arc::new(StreamManager::new());
     // Create the source
     let source = StreamSource {
         stream_type: StreamType::RTSP,
@@ -46,6 +47,7 @@ fn run_rtsp_live_view() -> Result<()> {
     };
 
     // Add the stream to the manager
+    //
     let stream_id = stream_manager.add_stream(source)?;
     println!("Created stream with ID: {}", stream_id);
 
@@ -131,4 +133,3 @@ fn main() {
         }
     });
 }
-
