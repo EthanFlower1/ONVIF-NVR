@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/table";
+import { PencilIcon, TrashIcon } from "@heroicons/react/24/outline";
+import { CheckIcon, XMarkIcon } from "@heroicons/react/16/solid";
 
 export default function Cameras() {
   const [data, setData] = useState<any[]>([]);
@@ -96,6 +98,15 @@ export default function Cameras() {
     }));
   };
 
+  // Placeholder delete function
+  const deleteCamera = (id: string) => {
+    // In a real implementation, you would make an API call to delete the camera
+    console.log(`Deleting camera with ID: ${id}`);
+
+    // For now, we'll just remove it from the local state
+    setData(data.filter(item => item.camera.id !== id));
+  };
+
   if (loading) return <div>Loading cameras...</div>;
   if (error) return <div>Error loading cameras: {error.message}</div>;
 
@@ -168,22 +179,32 @@ export default function Cameras() {
                       onClick={() => saveChanges(device.camera.id)}
                       className="px-2 py-1 bg-green-500 text-white rounded text-sm"
                     >
-                      Save
+                      <CheckIcon className="h-4 w-4" />
                     </button>
                     <button
                       onClick={cancelEditing}
                       className="px-2 py-1 bg-gray-300 rounded text-sm"
                     >
-                      Cancel
+                      <XMarkIcon className="h-4 w-4" />
                     </button>
                   </div>
                 ) : (
-                  <button
-                    onClick={() => startEditing(device)}
-                    className="px-2 py-1 bg-blue-500 text-white rounded text-sm"
-                  >
-                    Edit
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => startEditing(device)}
+                      className="p-1 text-blue-500 hover:text-blue-700"
+                      title="Edit"
+                    >
+                      <PencilIcon className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => deleteCamera(device.camera.id)}
+                      className="p-1 text-red-500 hover:text-red-700"
+                      title="Delete"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  </div>
                 )}
               </TableCell>
             </TableRow>

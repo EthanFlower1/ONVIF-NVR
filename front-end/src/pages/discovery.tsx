@@ -177,7 +177,7 @@ export default function DeviceDiscovery() {
 
       ) : (
         <Text className="mt-8 p-4 border rounded-lg text-zinc-500">
-          No devices discovered yet. Click the Discover button to scan your network.
+          No devices discovered yet. Click the Scan button to scan your network.
         </Text>
       )}
     </div>

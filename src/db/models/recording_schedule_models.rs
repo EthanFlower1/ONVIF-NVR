@@ -6,6 +6,7 @@ use uuid::Uuid;
 pub struct RecordingSchedule {
     pub id: Uuid,
     pub camera_id: Uuid,
+    pub stream_id: Uuid,
     pub name: String,
     pub enabled: bool,
     pub days_of_week: Vec<i32>, // 0-6 for Sunday-Saturday (using i32 to match PostgreSQL INTEGER)
@@ -23,6 +24,7 @@ pub struct RecordingSchedule {
 pub struct RecordingScheduleDb {
     pub id: Uuid,
     pub camera_id: Uuid,
+    pub stream_id: Uuid,
     pub name: String,
     pub enabled: bool,
     pub days_of_week: Vec<i32>, // INTEGER[] in PostgreSQL
@@ -40,6 +42,7 @@ impl From<RecordingSchedule> for RecordingScheduleDb {
         Self {
             id: schedule.id,
             camera_id: schedule.camera_id,
+            stream_id: schedule.stream_id,
             name: schedule.name,
             enabled: schedule.enabled,
             days_of_week: schedule.days_of_week,
@@ -59,6 +62,7 @@ impl From<RecordingScheduleDb> for RecordingSchedule {
         Self {
             id: db.id,
             camera_id: db.camera_id,
+            stream_id: db.stream_id,
             name: db.name,
             enabled: db.enabled,
             days_of_week: db.days_of_week,

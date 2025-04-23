@@ -8,6 +8,7 @@ use uuid::Uuid;
 pub struct Recording {
     pub id: Uuid,
     pub camera_id: Uuid,
+    pub stream_id: Uuid,
     pub start_time: DateTime<Utc>,
     pub end_time: Option<DateTime<Utc>>,
     pub file_path: PathBuf,
@@ -23,6 +24,7 @@ pub struct Recording {
 pub struct RecordingDb {
     pub id: Uuid,
     pub camera_id: Uuid,
+    pub stream_id: Uuid,
     pub start_time: DateTime<Utc>,
     pub end_time: Option<DateTime<Utc>>,
     pub file_path: String,
@@ -39,6 +41,7 @@ impl From<RecordingDb> for Recording {
         Self {
             id: db.id,
             camera_id: db.camera_id,
+            stream_id: db.stream_id,
             start_time: db.start_time,
             end_time: db.end_time,
             file_path: PathBuf::from(db.file_path),
@@ -57,6 +60,7 @@ impl From<Recording> for RecordingDb {
         Self {
             id: r.id,
             camera_id: r.camera_id,
+            stream_id: r.stream_id,
             start_time: r.start_time,
             end_time: r.end_time,
             file_path: r.file_path.to_string_lossy().to_string(),
@@ -74,6 +78,7 @@ impl From<Recording> for RecordingDb {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingSearchQuery {
     pub camera_ids: Option<Vec<Uuid>>,
+    pub stream_ids: Option<Vec<Uuid>>,
     pub start_time: Option<DateTime<Utc>>,
     pub end_time: Option<DateTime<Utc>>,
     pub limit: Option<usize>,
@@ -85,6 +90,7 @@ impl Default for RecordingSearchQuery {
     fn default() -> Self {
         Self {
             camera_ids: None,
+            stream_ids: None,
             start_time: None,
             end_time: None,
             limit: None,
