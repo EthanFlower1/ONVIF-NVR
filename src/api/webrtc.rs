@@ -444,7 +444,7 @@ pub async fn process_webrtc_offer(
                     let session_id_for_disconnect = session_id.clone();
                     
                     tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(50)).await;
+                        tokio::time::sleep(Duration::from_secs(10)).await;
                         
                         let should_terminate = {
                             let peer_connections = peer_connections_handle.lock().await;
@@ -472,6 +472,9 @@ pub async fn process_webrtc_offer(
                         if peer_connections.remove(&session_id_for_close).is_some() {
                             info!("Removed peer connection for session: {}", session_id_for_close);
                         }
+
+                        clean_up_gstreamer_elements(&session_id, &state_clone).await;
+                        // close_webrtc_session(state, ).await
                     });
                     
                     if connection_state != webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Closed {
