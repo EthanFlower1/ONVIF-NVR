@@ -473,7 +473,6 @@ pub async fn process_webrtc_offer(
                             info!("Removed peer connection for session: {}", session_id_for_close);
                         }
 
-                        clean_up_gstreamer_elements(&session_id, &state_clone).await;
                         // close_webrtc_session(state, ).await
                     });
                     
