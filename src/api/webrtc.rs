@@ -235,7 +235,8 @@ pub async fn process_webrtc_offer(
         let element_state = element.state(Some(gst::ClockTime::from_mseconds(100)));
         info!("Element {} is in state: {:?}", element.name(), element_state);
     }
-    let pipeline_state = pipeline.set_state(gst::State::Playing);
+
+    let _pipeline_state = pipeline.set_state(gst::State::Playing);
 
     // Create media engine and API
     let mut media_engine = MediaEngine::default();
@@ -358,7 +359,7 @@ pub async fn process_webrtc_offer(
                 sample_count += 1;
                 
                 // Debug log every 30 samples (roughly once per second at 30fps)
-                if sample_count % 30 == 0 {
+                if sample_count % 120 == 0 {
                     info!("AppSink received {} samples for session {}", sample_count, session_id_for_debug.clone());
                 }
                 
@@ -369,8 +370,6 @@ pub async fn process_webrtc_offer(
                         return Err(gst::FlowError::Error);
                     }
                 };
-
-                info!("SAMPLE Got called!!!!!: {:?}", &sample.info());
                 
                 let buffer = match sample.buffer() {
                     Some(buffer) => buffer,
@@ -444,8 +443,6 @@ pub async fn process_webrtc_offer(
                     let session_id_for_disconnect = session_id.clone();
                     
                     tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(10)).await;
-                        
                         let should_terminate = {
                             let peer_connections = peer_connections_handle.lock().await;
                             peer_connections.contains_key(&session_id_for_disconnect)
