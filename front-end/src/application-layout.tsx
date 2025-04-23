@@ -30,10 +30,13 @@ import {
   PlusIcon,
   ShieldCheckIcon,
   UserCircleIcon,
+  SignalIcon,
+  VideoCameraIcon,
 } from '@heroicons/react/16/solid'
 import {
   Cog6ToothIcon,
   HomeIcon,
+  PlayIcon,
   QuestionMarkCircleIcon,
   SparklesIcon,
   Square2StackIcon,
@@ -127,15 +130,15 @@ export function ApplicationLayout({
           <SidebarBody>
             <SidebarSection>
               <SidebarItem href="/" current={pathname === '/'}>
-                <HomeIcon />
-                <SidebarLabel>Home</SidebarLabel>
+                <PlayIcon />
+                <SidebarLabel>Live</SidebarLabel>
               </SidebarItem>
               <SidebarItem href="/discovery" current={pathname.startsWith('/discovery')}>
-                <Square2StackIcon />
+                <SignalIcon />
                 <SidebarLabel>Discovery</SidebarLabel>
               </SidebarItem>
               <SidebarItem href="/cameras" current={pathname.startsWith('/cameras')}>
-                <Square2StackIcon />
+                <VideoCameraIcon />
                 <SidebarLabel>Cameras</SidebarLabel>
               </SidebarItem>
               <SidebarItem href="/orders" current={pathname.startsWith('/orders')}>

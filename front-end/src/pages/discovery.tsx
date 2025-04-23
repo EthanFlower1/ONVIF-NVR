@@ -103,10 +103,10 @@ export default function DeviceDiscovery() {
           {loading ? (
             <>
               <Spinner className="mr-2" size="sm" />
-              Discovering...
+              Scanning...
             </>
           ) : (
-            'Discover'
+            'Scan'
           )}
         </Button>
       </div>

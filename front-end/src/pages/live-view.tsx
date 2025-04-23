@@ -90,14 +90,10 @@ export default function Liveview() {
                   className="relative aspect-video black rounded-lg overflow-hidden shadow-md"
                 >
                   <WebRTCStreamPlayer
+                    cameraName={camera_with_stream.camera.name}
                     streamId={stream.id}
                     serverUrl="http://localhost:4750"
                   />
-                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2">
-                    <h3 className="text-white text-sm font-medium">
-                      {camera_with_stream.camera.name}
-                    </h3>
-                  </div>
                 </div>
               );
             })
