@@ -1,9 +1,10 @@
+use crate::security::auth::AuthService;
 use anyhow::Result;
-use db::{migrations, repositories::cameras::CamerasRepository};
+use db::migrations;
 use gst::prelude::*;
 use gstreamer as gst;
 use log::info;
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 
 #[path = "./tutorial-common.rs"]
@@ -14,6 +15,7 @@ mod config;
 mod db;
 mod device_manager;
 mod error;
+mod security;
 mod stream_manager;
 pub use error::Error;
 
@@ -52,6 +54,7 @@ async fn run_app() -> Result<()> {
 
     let db_pool = std::sync::Arc::new(db_pool);
 
+    let auth_service = Arc::new(AuthService::new(db_pool.clone(), &config.security));
     let stream_manager = Arc::new(StreamManager::new(db_pool.clone()));
     let connected_cameras = &stream_manager.connect().await?;
     info!(
@@ -59,7 +62,8 @@ async fn run_app() -> Result<()> {
         connected_cameras
     );
 
-    let http_server = api::rest::RestApi::new(&config.api, db_pool, stream_manager).unwrap();
+    let http_server =
+        api::rest::RestApi::new(&config.api, db_pool, stream_manager, auth_service).unwrap();
 
     let _ = http_server.run().await;
     //

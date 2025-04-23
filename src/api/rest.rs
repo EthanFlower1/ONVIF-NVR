@@ -4,14 +4,17 @@ use crate::api::webrtc::{
 };
 use crate::db::models::camera_models::CameraWithStreams;
 use crate::db::models::stream_models::{ReferenceType, Stream, StreamReference, StreamType};
+use crate::db::models::user_models::{AuthToken, LoginCredentials, User, UserRole};
 use crate::db::repositories::cameras::CamerasRepository;
+use crate::db::repositories::users::UsersRepository;
 use crate::device_manager;
 use crate::device_manager::onvif_client::{OnvifCameraBuilder, OnvifError};
 use crate::error::Error;
+use crate::security::auth::AuthService;
 use crate::stream_manager::StreamManager;
 use crate::{config::ApiConfig, db::models::camera_models::Camera};
 use anyhow::Result;
-use axum::routing::get;
+use axum::routing::{delete, get, put};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -36,6 +39,7 @@ pub struct AppState {
     pub db_pool: Arc<PgPool>,
     pub cameras_repo: Arc<CamerasRepository>,
     pub stream_manager: Arc<StreamManager>,
+    pub auth_service: Arc<AuthService>,
 }
 
 pub type ApiResult<T> = std::result::Result<T, ApiError>;
@@ -119,10 +123,19 @@ impl IntoResponse for ApiError {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct RegisterRequest {
+    username: String,
+    email: String,
+    password: String,
+    role: Option<UserRole>,
+}
+
 pub struct RestApi {
     config: ApiConfig,
     db_pool: Arc<PgPool>,
     stream_manager: Arc<StreamManager>,
+    auth_service: Arc<AuthService>,
 }
 
 impl RestApi {
@@ -130,11 +143,13 @@ impl RestApi {
         config: &ApiConfig,
         db_pool: Arc<PgPool>,
         stream_manager: Arc<StreamManager>,
+        auth_service: Arc<AuthService>,
     ) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
             db_pool,
             stream_manager,
+            auth_service,
         })
     }
 
@@ -143,6 +158,7 @@ impl RestApi {
             db_pool: Arc::clone(&self.db_pool),
             cameras_repo: Arc::new(CamerasRepository::new(self.db_pool.clone())),
             stream_manager: self.stream_manager.clone(),
+            auth_service: self.auth_service.clone(),
         };
 
         let webrtc_state = Arc::new(WebRTCState::new(
@@ -162,17 +178,17 @@ impl RestApi {
         // Build the API router with routes
         let app = Router::new()
             // Auth routes
-            // .route("/api/auth/login", post(login))
-            // .route("/api/auth/register", post(register))
-            // .route("/api/auth/me", get(get_current_user))
-            // .route("/api/auth/users/:id/change-password", post(change_password))
-            // .route("/api/auth/users/:id/reset-password", post(reset_password))
-            // .route("/api/auth/users/:id/role", put(update_role))
-            // .route("/api/auth/users/:id/status", put(set_user_active))
+            .route("/api/auth/login", post(login))
+            .route("/api/auth/register", post(register))
+            .route("/api/auth/me", get(get_current_user))
+            .route("/api/auth/users/:id/change-password", post(change_password))
+            .route("/api/auth/users/:id/reset-password", post(reset_password))
+            .route("/api/auth/users/:id/role", put(update_role))
+            .route("/api/auth/users/:id/status", put(set_user_active))
             // User routes
-            // .route("/api/users", get(get_all_users))
-            // .route("/api/users/:id", get(get_user_by_id))
-            // .route("/api/users/:id", delete(delete_user))
+            .route("/api/users", get(get_all_users))
+            .route("/api/users/:id", get(get_user_by_id))
+            .route("/api/users/:id", delete(delete_user))
             // Camera routes
             .route("/api/cameras", get(get_cameras))
             // .route("/api/cameras", post(create_camera))
@@ -242,14 +258,11 @@ impl RestApi {
 //     Ok(Json(cameras))
 // }
 
-async fn discover_cameras(State(state): State<AppState>) -> ApiResult<Json<Vec<Camera>>> {
+async fn discover_cameras(State(_state): State<AppState>) -> ApiResult<Json<Vec<Camera>>> {
     info!("Starting camera discovery");
 
-    // Discover cameras on the network without requiring database
     let discovered_cameras = device_manager::discovery::discover().await?;
-    info!("Discovered {} cameras", discovered_cameras.len());
 
-    // Return the discovered cameras directly without saving to the database
     Ok(Json(discovered_cameras))
 }
 
@@ -366,4 +379,161 @@ async fn get_camera_by_id(
     })?;
 
     Ok(Json(camera))
+}
+
+// Auth API Handlers
+async fn login(
+    State(state): State<AppState>,
+    Json(credentials): Json<LoginCredentials>,
+) -> ApiResult<Json<(User, AuthToken)>> {
+    let (user, token) = state.auth_service.login(&credentials).await?;
+    Ok(Json((user, token)))
+}
+
+async fn register(
+    State(state): State<AppState>,
+    Json(req): Json<RegisterRequest>,
+) -> ApiResult<Json<(User, AuthToken)>> {
+    let role = req.role.unwrap_or(UserRole::Viewer);
+    let user = state
+        .auth_service
+        .register(&req.username, &req.email, &req.password, role)
+        .await?;
+
+    // After registration, log the user in
+    let credentials = LoginCredentials {
+        username: user.username,
+        password: req.password,
+    };
+    let (user, token) = state.auth_service.login(&credentials).await?;
+
+    Ok(Json((user, token)))
+}
+
+async fn get_current_user(
+    State(state): State<AppState>,
+    // TODO: Add authentication middleware to extract user from token
+) -> ApiResult<Json<User>> {
+    // For now, return a mock user
+    let repo = UsersRepository::new(Arc::clone(&state.db_pool));
+    let users = repo.get_all().await?;
+    if let Some(user) = users.first() {
+        Ok(Json(user.clone()))
+    } else {
+        Err(ApiError {
+            message: "No users found".to_string(),
+            status: StatusCode::NOT_FOUND.as_u16(),
+        })
+    }
+}
+
+async fn change_password(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<serde_json::Value>,
+) -> ApiResult<Json<()>> {
+    let current_password = payload
+        .get("current_password")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError {
+            message: "Missing current_password".to_string(),
+            status: StatusCode::BAD_REQUEST.as_u16(),
+        })?;
+
+    let new_password = payload
+        .get("new_password")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError {
+            message: "Missing new_password".to_string(),
+            status: StatusCode::BAD_REQUEST.as_u16(),
+        })?;
+
+    state
+        .auth_service
+        .change_password(&user_id, current_password, new_password)
+        .await?;
+    Ok(Json(()))
+}
+
+async fn reset_password(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let new_password = state.auth_service.reset_password(&user_id).await?;
+    Ok(Json(serde_json::json!({ "password": new_password })))
+}
+
+async fn update_role(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<serde_json::Value>,
+) -> ApiResult<Json<User>> {
+    let role_str = payload
+        .get("role")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError {
+            message: "Missing role".to_string(),
+            status: StatusCode::BAD_REQUEST.as_u16(),
+        })?;
+
+    let role = match role_str {
+        "admin" => UserRole::Admin,
+        "operator" => UserRole::Operator,
+        "viewer" => UserRole::Viewer,
+        _ => {
+            return Err(ApiError {
+                message: format!("Invalid role: {}", role_str),
+                status: StatusCode::BAD_REQUEST.as_u16(),
+            })
+        }
+    };
+
+    let user = state.auth_service.update_role(&user_id, role).await?;
+    Ok(Json(user))
+}
+
+async fn set_user_active(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<serde_json::Value>,
+) -> ApiResult<Json<User>> {
+    let active = payload
+        .get("active")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| ApiError {
+            message: "Missing active status".to_string(),
+            status: StatusCode::BAD_REQUEST.as_u16(),
+        })?;
+
+    let user = state.auth_service.set_active(&user_id, active).await?;
+    Ok(Json(user))
+}
+
+// User API Handlers
+async fn get_all_users(State(state): State<AppState>) -> ApiResult<Json<Vec<User>>> {
+    let repo = UsersRepository::new(Arc::clone(&state.db_pool));
+    let users = repo.get_all().await?;
+    Ok(Json(users))
+}
+
+async fn get_user_by_id(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> ApiResult<Json<User>> {
+    let repo = UsersRepository::new(Arc::clone(&state.db_pool));
+    let user = repo.get_by_id(&user_id).await?.ok_or_else(|| ApiError {
+        message: format!("User not found: {}", user_id),
+        status: StatusCode::NOT_FOUND.as_u16(),
+    })?;
+
+    Ok(Json(user))
+}
+
+async fn delete_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> ApiResult<Json<()>> {
+    let repo = UsersRepository::new(Arc::clone(&state.db_pool));
+    repo.delete(&user_id).await?;
+    Ok(Json(()))
 }
