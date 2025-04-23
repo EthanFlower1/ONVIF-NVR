@@ -558,7 +558,136 @@ pub async fn close_webrtc_session(
     } else {
         warn!("No peer connection found for session: {}", session_id);
     }
-    
+     clean_up_gstreamer_elements(&session_id, &state).await;
+
     info!("WebRTC session closed: {}", session_id);
     Json(json!({ "success": true }))
+}
+
+async fn clean_up_gstreamer_elements(session_id: &str, state: &Arc<WebRTCState>) {
+    // Generate unique element suffix
+    let element_suffix = session_id.replace("-", "");
+
+    // Get all streams to check for elements to clean up
+    let stream_list = state.stream_manager.list_streams();
+
+    for (stream_id, _) in stream_list {
+        if let Ok((pipeline, tee)) = state.stream_manager.get_stream_access(&stream_id) {
+            info!(
+                "Cleaning up GStreamer elements for session {} in stream {}",
+                session_id, stream_id
+            );
+
+            // Element names for this session
+            let queue_name = format!("webrtc_queue_{}", element_suffix);
+            let depay_name = format!("webrtc_depay_{}", element_suffix);
+            let parse_name = format!("webrtc_parse_{}", element_suffix);
+            let appsink_name = format!("webrtc_appsink_{}", element_suffix);
+
+            // Find the elements
+            let queue_opt = pipeline.by_name(&queue_name);
+            let depay_opt = pipeline.by_name(&depay_name);
+            let parse_opt = pipeline.by_name(&parse_name);
+            let appsink_opt = pipeline.by_name(&appsink_name);
+
+            // Check if we found any elements
+            if queue_opt.is_none()
+                && depay_opt.is_none()
+                && parse_opt.is_none()
+                && appsink_opt.is_none()
+            {
+                debug!(
+                    "No elements found for session {} in stream {}",
+                    session_id, stream_id
+                );
+                continue;
+            }
+
+            // First handle unlinking from tee if queue exists
+            if let Some(queue) = &queue_opt {
+                if let Some(queue_sink_pad) = queue.static_pad("sink") {
+                    if let Some(tee_src_pad) = queue_sink_pad.peer() {
+                        // Block the pad before unlinking
+                        if let Some(probe_id) = tee_src_pad
+                            .add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, |_pad, _info| {
+                                gst::PadProbeReturn::Ok
+                            })
+                        {
+                            // Unlink the pads
+                            let _ = tee_src_pad.unlink(&queue_sink_pad);
+
+                            // Release the tee request pad
+                            tee.release_request_pad(&tee_src_pad);
+
+                            // Remove the probe
+                            tee_src_pad.remove_probe(probe_id);
+                        }
+                    }
+                }
+            }
+
+            // Gather all found elements
+            let mut elements = Vec::new();
+            if let Some(e) = queue_opt {
+                elements.push(e);
+            }
+            if let Some(e) = depay_opt {
+                elements.push(e);
+            }
+            if let Some(e) = parse_opt {
+                elements.push(e);
+            }
+            if let Some(e) = appsink_opt {
+                elements.push(e);
+            }
+
+            // Send EOS to elements
+            for element in &elements {
+                let _ = element.send_event(gst::event::Eos::new());
+            }
+
+            // Set elements to NULL state
+            for element in &elements {
+                let _ = element.set_state(gst::State::Null);
+            }
+
+            // Remove elements from pipeline
+            if !elements.is_empty() {
+                match pipeline.remove_many(&elements) {
+                    Ok(_) => info!(
+                        "Successfully removed {} elements for session {}",
+                        elements.len(),
+                        session_id
+                    ),
+                    Err(e) => warn!("Failed to remove elements from pipeline: {:?}", e),
+                }
+            }
+
+            // Check if this was the last connection for this stream
+            let has_other_connections = {
+                let connections = state.peer_connections.lock().await;
+                !connections.is_empty()
+            };
+
+            // If no other connections, set the pipeline to NULL state
+            if !has_other_connections {
+                info!(
+                    "No more active connections for stream {}, stopping pipeline",
+                    stream_id
+                );
+                if let Err(e) = pipeline.set_state(gst::State::Paused) {
+                    warn!("Failed to set pipeline to NULL state: {:?}", e);
+                } else {
+                    info!("Successfully set pipeline to NULL state");
+
+                    // Remove the stream entirely
+                    // if let Err(e) = state.stream_manager.remove_stream(&stream_id) {
+                    //     warn!("Failed to remove stream: {:?}", e);
+                    // } else {
+                    //     info!("Successfully removed stream: {}", stream_id);
+                    // }
+                }
+            }
+        }
+    }
 }

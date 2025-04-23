@@ -126,6 +126,24 @@ impl StreamManager {
             .by_name("t")
             .ok_or_else(|| anyhow!("Failed to get tee element"))?;
 
+        // This ensures the pipeline remains stable even when all dynamic branches are removed
+        let queue = gst::ElementFactory::make("queue")
+            .name(&format!("{}_dummy_queue", stream_id))
+            .build()?;
+
+        let fakesink = gst::ElementFactory::make("fakesink")
+            .name(&format!("{}_dummy_sink", stream_id))
+            .property("sync", &false) // Don't sync to clock
+            .property("async", &false) // Don't async wait for preroll
+            .build()?;
+
+        // Add elements to pipeline
+        pipeline.add_many(&[&queue, &fakesink])?;
+
+        // Link elements
+        tee.link(&queue)?;
+        queue.link(&fakesink)?;
+
         // Create the Stream object and add it to our collection
         let stream = Stream {
             source,
