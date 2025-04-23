@@ -35,6 +35,7 @@ axum-extra = "0.7"
 tower-http = { version = "0.4", features = ["cors", "auth", "fs"] }
 url = "2.5.4"
 webrtc = "0.12.0"
+jsonwebtoken = "9.3.1"
 
 [[example]]
 name = "simple_stream"
