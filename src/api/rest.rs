@@ -3,20 +3,24 @@ use crate::api::webrtc::{
     WebRTCState,
 };
 use crate::db::models::camera_models::CameraWithStreams;
+use crate::db::models::recording_schedule_models::RecordingSchedule;
 use crate::db::models::stream_models::{ReferenceType, Stream, StreamReference, StreamType};
 use crate::db::models::user_models::{AuthToken, LoginCredentials, User, UserRole};
 use crate::db::repositories::cameras::CamerasRepository;
+use crate::db::repositories::recordings::RecordingsRepository;
+use crate::db::repositories::schedules::SchedulesRepository;
 use crate::db::repositories::users::UsersRepository;
 use crate::device_manager;
 use crate::device_manager::onvif_client::{OnvifCameraBuilder, OnvifError};
 use crate::error::Error;
+use crate::recorder::record::RecordingManager;
 use crate::security::auth::AuthService;
 use crate::stream_manager::StreamManager;
 use crate::{config::ApiConfig, db::models::camera_models::Camera};
 use anyhow::Result;
 use axum::routing::{delete, get, put};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
@@ -24,14 +28,19 @@ use axum::{
 };
 use chrono::Utc;
 use log::info;
+use regex;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use uuid::Uuid;
+
+// Import recording controller
+pub mod recording_controller;
 
 // Shared application state
 #[derive(Clone)]
@@ -40,6 +49,10 @@ pub struct AppState {
     pub cameras_repo: Arc<CamerasRepository>,
     pub stream_manager: Arc<StreamManager>,
     pub auth_service: Arc<AuthService>,
+    pub recording_manager: Arc<RecordingManager>,
+    pub recordings_repo: Arc<RecordingsRepository>,
+    pub schedules_repo: Arc<SchedulesRepository>,
+    pub message_broker: Arc<crate::messaging::MessageBroker>,
 }
 
 pub type ApiResult<T> = std::result::Result<T, ApiError>;
@@ -58,6 +71,7 @@ impl From<OnvifError> for ApiError {
         }
     }
 }
+
 impl From<OnvifError> for Error {
     fn from(err: OnvifError) -> Self {
         Error::Onvif(err.0)
@@ -104,11 +118,20 @@ impl From<Error> for ApiError {
 impl From<anyhow::Error> for ApiError {
     fn from(err: anyhow::Error) -> Self {
         if let Some(err) = err.downcast_ref::<Error>() {
-            return (*err).clone().into();
+            return err.clone().into();
         }
 
         ApiError {
             message: err.to_string(),
+            status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+        }
+    }
+}
+
+impl From<serde_json::Error> for ApiError {
+    fn from(err: serde_json::Error) -> Self {
+        ApiError {
+            message: format!("JSON serialization error: {}", err),
             status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
         }
     }
@@ -136,6 +159,7 @@ pub struct RestApi {
     db_pool: Arc<PgPool>,
     stream_manager: Arc<StreamManager>,
     auth_service: Arc<AuthService>,
+    message_broker: Arc<crate::messaging::MessageBroker>,
 }
 
 impl RestApi {
@@ -144,21 +168,36 @@ impl RestApi {
         db_pool: Arc<PgPool>,
         stream_manager: Arc<StreamManager>,
         auth_service: Arc<AuthService>,
+        message_broker: Arc<crate::messaging::MessageBroker>,
     ) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
             db_pool,
             stream_manager,
             auth_service,
+            message_broker,
         })
     }
 
     pub async fn run(&self) -> Result<()> {
+        // Create recording manager
+        let recording_manager = Arc::new(RecordingManager::new(
+            Arc::clone(&self.db_pool),
+            Arc::clone(&self.stream_manager),
+            &std::path::Path::new("./recordings"),
+            300, // 5 minutes segment duration
+            "mp4",
+        ));
+
         let state = AppState {
             db_pool: Arc::clone(&self.db_pool),
             cameras_repo: Arc::new(CamerasRepository::new(self.db_pool.clone())),
             stream_manager: self.stream_manager.clone(),
             auth_service: self.auth_service.clone(),
+            recording_manager: Arc::clone(&recording_manager),
+            recordings_repo: Arc::new(RecordingsRepository::new(self.db_pool.clone())),
+            schedules_repo: Arc::new(SchedulesRepository::new(self.db_pool.clone())),
+            message_broker: self.message_broker.clone(),
         };
 
         let webrtc_state = Arc::new(WebRTCState::new(
@@ -194,27 +233,32 @@ impl RestApi {
             // .route("/api/cameras", post(create_camera))
             .route("/api/cameras/discover", post(discover_cameras))
             .route("/api/cameras/connect", post(camera_connect))
-            // .route("/api/cameras/:id", get(get_camera_by_id))
-            // .route("/api/cameras/:id", put(update_camera))
-            // .route("/api/cameras/:id", delete(delete_camera))
-            // .route("/api/cameras/:id/status", put(update_camera_status))
-            // .route("/api/cameras/:id/refresh", post(refresh_camera_details))
+            .route("/api/cameras/:id", get(get_camera_by_id))
+            .route("/api/cameras/:id", put(update_camera))
+            .route("/api/cameras/:id", delete(delete_camera))
+            .route("/api/cameras/:id/status", put(update_camera_status))
+            .route("/api/cameras/:id/refresh", post(refresh_camera_details))
             // .route("/api/cameras/:id/streams", get(get_camera_streams))
             // Schedule routes
-            // .route("/api/schedules", get(get_schedules))
-            // .route("/api/schedules", post(create_schedule))
-            // .route("/api/schedules/:id", get(get_schedule_by_id))
-            // .route("/api/schedules/:id", put(update_schedule))
-            // .route("/api/schedules/:id", delete(delete_schedule))
-            // .route("/api/schedules/:id/status", put(set_schedule_enabled))
-            // .route("/api/cameras/:id/schedules", get(get_schedules_by_camera))
-            // Recording routes
-            // .route("/api/recordings", get(search_recordings))
-            // .route("/api/recordings/:id", get(get_recording_by_id))
-            // .route("/api/recordings/:id", delete(delete_recording))
-            // .route("/api/recordings/:id/stream", get(stream_recording))
-            // .route("/api/recordings/:id/download", get(download_recording))
-            // .route("/api/cameras/:id/recordings", get(get_recordings_by_camera))
+            .route("/api/schedules", get(get_schedules))
+            .route("/api/schedules", post(create_schedule))
+            .route("/api/schedules/:id", get(get_schedule_by_id))
+            .route("/api/schedules/:id", put(update_schedule))
+            .route("/api/schedules/:id", delete(delete_schedule))
+            .route("/api/schedules/:id/status", put(set_schedule_enabled))
+            .route("/api/cameras/:id/schedules", get(get_schedules_by_camera))
+            // Recording API routes
+            .route("/api/recordings", get(search_recordings))
+            .route("/api/recordings/:id", get(get_recording_by_id))
+            .route("/api/recordings/:id", delete(delete_recording))
+            .route("/api/recordings/:id/stream", get(stream_recording))
+            .route("/api/recordings/:id/download", get(download_recording))
+            .route("/api/cameras/:id/recordings", get(get_recordings_by_camera))
+            // Create recording controller with routes using state
+            .nest(
+                "/recording",
+                recording_controller::create_router(state.clone()),
+            )
             // Regular routes with AppState
             .with_state(state)
             // Add WebRTC routes with their own state
@@ -372,13 +416,321 @@ async fn get_camera_by_id(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Camera>> {
-    let repo = CamerasRepository::new(Arc::clone(&state.db_pool));
-    let camera = repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
+    let camera = state.cameras_repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
         message: format!("Camera not found: {}", id),
         status: StatusCode::NOT_FOUND.as_u16(),
     })?;
 
     Ok(Json(camera))
+}
+
+#[derive(Debug, Deserialize)]
+struct CameraUpdateRequest {
+    name: Option<String>,
+    model: Option<String>,
+    manufacturer: Option<String>,
+    ip_address: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    onvif_endpoint: Option<String>,
+    status: Option<String>,
+    ptz_supported: Option<bool>,
+    audio_supported: Option<bool>,
+    analytics_supported: Option<bool>,
+    recording_mode: Option<String>,
+    retention_days: Option<i32>,
+}
+
+async fn update_camera(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<CameraUpdateRequest>,
+) -> ApiResult<Json<Camera>> {
+    let mut camera = state.cameras_repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
+        message: format!("Camera not found: {}", id),
+        status: StatusCode::NOT_FOUND.as_u16(),
+    })?;
+
+    // Track if credentials are being updated
+    let mut credentials_updated = false;
+    let old_username = camera.username.clone();
+    let old_password = camera.password.clone();
+
+    if let Some(name) = req.name {
+        camera.name = name;
+    }
+
+    if let Some(model) = req.model {
+        camera.model = Some(model);
+    }
+
+    if let Some(manufacturer) = req.manufacturer {
+        camera.manufacturer = Some(manufacturer);
+    }
+
+    if let Some(ip_address) = req.ip_address {
+        camera.ip_address = ip_address;
+    }
+
+    if let Some(username) = req.username {
+        if old_username != Some(username.clone()) {
+            credentials_updated = true;
+        }
+        camera.username = Some(username);
+    }
+
+    if let Some(password) = req.password {
+        if old_password != Some(password.clone()) {
+            credentials_updated = true;
+        }
+        camera.password = Some(password);
+    }
+
+    if let Some(onvif_endpoint) = req.onvif_endpoint {
+        camera.onvif_endpoint = Some(onvif_endpoint);
+    }
+
+    if let Some(status) = req.status {
+        camera.status = status;
+    }
+
+    if let Some(ptz_supported) = req.ptz_supported {
+        camera.ptz_supported = Some(ptz_supported);
+    }
+
+    if let Some(audio_supported) = req.audio_supported {
+        camera.audio_supported = Some(audio_supported);
+    }
+
+    if let Some(analytics_supported) = req.analytics_supported {
+        camera.analytics_supported = Some(analytics_supported);
+    }
+
+    if let Some(recording_mode) = req.recording_mode {
+        camera.recording_mode = Some(recording_mode);
+    }
+
+    if let Some(retention_days) = req.retention_days {
+        camera.retention_days = Some(retention_days);
+    }
+
+    // Update the camera with the new info
+    let updated = state.cameras_repo.update(&camera).await?;
+
+    Ok(Json(updated))
+}
+
+#[derive(Debug, Deserialize)]
+struct CameraStatusUpdateRequest {
+    status: String,
+}
+
+async fn update_camera_status(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<CameraStatusUpdateRequest>,
+) -> ApiResult<Json<Camera>> {
+    // Validate status value
+    let valid_statuses = ["discovered", "connected", "active", "inactive", "error", "offline"];
+    if !valid_statuses.contains(&req.status.as_str()) {
+        return Err(ApiError {
+            message: format!(
+                "Invalid status. Must be one of: {}",
+                valid_statuses.join(", ")
+            ),
+            status: StatusCode::BAD_REQUEST.as_u16(),
+        });
+    }
+
+    // Get the camera to update
+    let mut camera = state.cameras_repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
+        message: format!("Camera not found: {}", id),
+        status: StatusCode::NOT_FOUND.as_u16(),
+    })?;
+
+    // Update the status
+    camera.status = req.status;
+    
+    // Use the repository method specifically for status update if complex logic needed,
+    // or just update the camera object
+    state.cameras_repo.update_status(&id, &camera.status).await?;
+    
+    // Fetch the updated camera to return the latest state
+    let updated_camera = state.cameras_repo.get_by_id(&id).await?
+        .ok_or_else(|| ApiError {
+            message: format!("Camera not found after update: {}", id),
+            status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+        })?;
+    
+    Ok(Json(updated_camera))
+}
+
+async fn refresh_camera_details(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<CameraWithStreams>> {
+    // Get existing camera
+    let camera = state.cameras_repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
+        message: format!("Camera not found: {}", id),
+        status: StatusCode::NOT_FOUND.as_u16(),
+    })?;
+    
+    // Ensure we have credentials
+    let username = camera.username.clone().ok_or_else(|| ApiError {
+        message: "Camera username is missing".to_string(),
+        status: StatusCode::BAD_REQUEST.as_u16(),
+    })?;
+    
+    let password = camera.password.clone().ok_or_else(|| ApiError {
+        message: "Camera password is missing".to_string(),
+        status: StatusCode::BAD_REQUEST.as_u16(),
+    })?;
+    
+    // Create ONVIF client to get fresh device information
+    let client = OnvifCameraBuilder::new()
+        .uri(&format!("http://{}", &camera.ip_address))?
+        .credentials(&username, &password)
+        .service_path(camera.onvif_endpoint.as_deref().unwrap_or("onvif/device_service"))
+        .fix_time(true)
+        .auth_type("digest")
+        .build()
+        .await?;
+    
+    // Get updated device information
+    let device_info = client.get_device_information().await?;
+    
+    // Get stream URIs
+    let stream_uris = client.get_stream_uris().await?;
+    
+    // Create an updated camera with streams object
+    let mut updated_camera = camera.clone();
+    updated_camera.manufacturer = Some(device_info.manufacturer);
+    updated_camera.model = Some(device_info.model);
+    updated_camera.firmware_version = Some(device_info.firmware_version);
+    updated_camera.serial_number = Some(device_info.serial_number);
+    updated_camera.hardware_id = Some(device_info.hardware_id);
+    updated_camera.updated_at = Utc::now();
+    updated_camera.last_updated = Some(Utc::now());
+    
+    // Get existing streams for this camera
+    let existing_streams = state.cameras_repo.get_streams(&id).await?;
+    let mut streams = Vec::new();
+    let mut stream_references = Vec::new();
+    
+    // Update existing streams or create new ones
+    for (i, stream_response) in stream_uris.iter().enumerate() {
+        let now = Utc::now();
+        
+        // Try to find an existing stream to update
+        let stream_exists = i < existing_streams.len();
+        
+        let mut stream = if stream_exists {
+            let mut existing = existing_streams[i].clone();
+            existing.camera_id = updated_camera.id;
+            existing.name = stream_response.name.clone();
+            existing.url = stream_response.uri.clone();
+            existing.codec = stream_response.video_encoding.clone();
+            existing.framerate = stream_response.framerate.map(|value| value as i32);
+            existing.bitrate = stream_response.bitrate.map(|value| value as i32);
+            existing.audio_bitrate = stream_response.audio_bitrate.map(|value| value as i32);
+            existing.audio_sample_rate = stream_response.audio_samplerate.map(|value| value as i32);
+            existing.audio_codec = stream_response.audio_encoding.clone();
+            existing
+        } else {
+            let mut new_stream = Stream::default();
+            new_stream.camera_id = updated_camera.id;
+            new_stream.name = stream_response.name.clone();
+            new_stream.url = stream_response.uri.clone();
+            new_stream.codec = stream_response.video_encoding.clone();
+            new_stream.framerate = stream_response.framerate.map(|value| value as i32);
+            new_stream.bitrate = stream_response.bitrate.map(|value| value as i32);
+            new_stream.audio_bitrate = stream_response.audio_bitrate.map(|value| value as i32);
+            new_stream.audio_sample_rate = stream_response.audio_samplerate.map(|value| value as i32);
+            new_stream.audio_codec = stream_response.audio_encoding.clone();
+            new_stream
+        };
+        
+        if let Some((width, height)) = stream_response.video_resolution {
+            stream.width = Some(width as i32);
+            stream.height = Some(height as i32);
+            stream.resolution = Some(format!("{}x{}", width, height));
+        }
+        
+        // Set stream type and primary flag
+        stream.is_primary = Some(i == 0);
+        stream.updated_at = now;
+        
+        // Add stream reference if it's a new stream
+        if !stream_exists {
+            let stream_ref = StreamReference {
+                id: Uuid::new_v4(),
+                camera_id: updated_camera.id,
+                stream_id: stream.id,
+                reference_type: match i {
+                    0 => ReferenceType::Primary,
+                    1 => ReferenceType::Sub,
+                    2 => ReferenceType::Tertiary,
+                    3 => ReferenceType::Lowres,
+                    4 => ReferenceType::Mobile,
+                    5 => ReferenceType::Analytics,
+                    _ => ReferenceType::Unknown,
+                },
+                display_order: Some(i as i32),
+                is_default: Some(i == 0),
+                created_at: now,
+                updated_at: now,
+            };
+            stream_references.push(stream_ref);
+        }
+        
+        streams.push(stream);
+    }
+    
+    // Create camera with streams object for update
+    let camera_with_streams = CameraWithStreams {
+        camera: updated_camera,
+        streams,
+        stream_references,
+    };
+    
+    // Update camera and streams in database
+    let updated = state.cameras_repo.update_with_streams(&camera_with_streams).await?;
+    
+    info!("Successfully refreshed camera details for {}", id);
+    Ok(Json(updated))
+}
+
+async fn delete_camera(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Json<serde_json::Value>> {
+    // Check if camera exists first
+    let camera = state.cameras_repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
+        message: format!("Camera not found: {}", id),
+        status: StatusCode::NOT_FOUND.as_u16(),
+    })?;
+    
+    // Get existing streams and stop any active recordings
+    let streams = state.cameras_repo.get_streams(&id).await?;
+    
+    // Stop any active recordings for this camera
+    for stream in &streams {
+        if let Some(is_active) = stream.is_active {
+            if is_active {
+                // Try to stop recording, but don't fail if it doesn't work
+                match state.recording_manager.stop_recording(&camera.id, &stream.id).await {
+                    Ok(_) => info!("Stopped recording for stream {} before camera deletion", stream.id),
+                    Err(e) => info!("Failed to stop recording for stream {}: {}", stream.id, e),
+                }
+            }
+        }
+    }
+    
+    // Delete camera and all related data
+    let result = state.cameras_repo.delete(&id).await?;
+    
+    Ok(Json(serde_json::json!({
+        "success": result,
+        "id": id.to_string(),
+        "message": format!("Camera '{}' deleted successfully", camera.name)
+    })))
 }
 
 // Auth API Handlers
@@ -535,5 +887,376 @@ async fn delete_user(
 ) -> ApiResult<Json<()>> {
     let repo = UsersRepository::new(Arc::clone(&state.db_pool));
     repo.delete(&user_id).await?;
+    Ok(Json(()))
+}
+
+// Recording API handlers
+async fn search_recordings(
+    State(state): State<AppState>,
+    Query(params): Query<recording_controller::SearchParams>,
+) -> ApiResult<Json<HashMap<String, serde_json::Value>>> {
+    // Convert search parameters to the internal search query format
+    let mut query = crate::db::models::recording_models::RecordingSearchQuery {
+        camera_ids: None,
+        stream_ids: None,
+        start_time: None,
+        end_time: None,
+        event_types: None,
+        schedule_id: None,
+        min_duration: None,
+        limit: params.limit,
+        offset: params.offset,
+    };
+
+    // Parse camera ID if provided
+    if let Some(camera_id_str) = &params.camera_id {
+        if let Ok(camera_id) = Uuid::parse_str(camera_id_str) {
+            query.camera_ids = Some(vec![camera_id]);
+        }
+    }
+
+    // Parse stream ID if provided
+    if let Some(stream_id_str) = &params.stream_id {
+        if let Ok(stream_id) = Uuid::parse_str(stream_id_str) {
+            query.stream_ids = Some(vec![stream_id]);
+        }
+    }
+
+    // Parse start time if provided
+    if let Some(start_time_str) = &params.start_time {
+        if let Ok(start_time) = chrono::DateTime::parse_from_rfc3339(start_time_str) {
+            query.start_time = Some(start_time.with_timezone(&Utc));
+        }
+    }
+
+    // Parse end time if provided
+    if let Some(end_time_str) = &params.end_time {
+        if let Ok(end_time) = chrono::DateTime::parse_from_rfc3339(end_time_str) {
+            query.end_time = Some(end_time.with_timezone(&Utc));
+        }
+    }
+
+    // Parse event type if provided
+    if let Some(event_type_str) = &params.event_type {
+        let event_type = match event_type_str.to_lowercase().as_str() {
+            "continuous" => crate::db::models::recording_models::RecordingEventType::Continuous,
+            "motion" => crate::db::models::recording_models::RecordingEventType::Motion,
+            "audio" => crate::db::models::recording_models::RecordingEventType::Audio,
+            "external" => crate::db::models::recording_models::RecordingEventType::External,
+            "manual" => crate::db::models::recording_models::RecordingEventType::Manual,
+            "analytics" => crate::db::models::recording_models::RecordingEventType::Analytics,
+            _ => {
+                return Err(ApiError {
+                    message: format!("Invalid event type: {}", event_type_str),
+                    status: StatusCode::BAD_REQUEST.as_u16(),
+                })
+            }
+        };
+
+        query.event_types = Some(vec![event_type]);
+    }
+
+    // Execute search query
+    let recordings = state.recordings_repo.search(&query).await?;
+
+    // Convert to response format
+    let mut response = HashMap::new();
+    response.insert("count".to_string(), serde_json::json!(recordings.len()));
+    response.insert("recordings".to_string(), serde_json::to_value(&recordings)?);
+
+    Ok(Json(response))
+}
+
+async fn get_recording_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let recording = state
+        .recordings_repo
+        .get_by_id(&id)
+        .await?
+        .ok_or_else(|| ApiError {
+            message: format!("Recording not found: {}", id),
+            status: StatusCode::NOT_FOUND.as_u16(),
+        })?;
+
+    Ok(Json(serde_json::to_value(recording)?))
+}
+
+async fn delete_recording(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<()>> {
+    state.recordings_repo.delete(&id).await?;
+    Ok(Json(()))
+}
+
+async fn stream_recording(State(_state): State<AppState>, Path(_id): Path<Uuid>) -> ApiResult<()> {
+    // Implement streaming logic - for now just return not implemented
+    Err(ApiError {
+        message: "Streaming not yet implemented".to_string(),
+        status: StatusCode::NOT_IMPLEMENTED.as_u16(),
+    })
+}
+
+async fn download_recording(
+    State(_state): State<AppState>,
+    Path(_id): Path<Uuid>,
+) -> ApiResult<()> {
+    // Implement download logic - for now just return not implemented
+    Err(ApiError {
+        message: "Download not yet implemented".to_string(),
+        status: StatusCode::NOT_IMPLEMENTED.as_u16(),
+    })
+}
+
+async fn get_recordings_by_camera(
+    State(state): State<AppState>,
+    Path(camera_id): Path<Uuid>,
+) -> ApiResult<Json<Vec<serde_json::Value>>> {
+    // Create a search query for this camera's recordings
+    let query = crate::db::models::recording_models::RecordingSearchQuery {
+        camera_ids: Some(vec![camera_id]),
+        stream_ids: None,
+        start_time: None,
+        end_time: None,
+        event_types: None,
+        schedule_id: None,
+        min_duration: None,
+        limit: Some(100),
+        offset: Some(0),
+    };
+
+    // Execute search query
+    let recordings = state.recordings_repo.search(&query).await?;
+
+    // Convert to JSON value array
+    let recordings_json = serde_json::to_value(recordings)?;
+
+    if let serde_json::Value::Array(recordings_array) = recordings_json {
+        Ok(Json(recordings_array))
+    } else {
+        Err(ApiError {
+            message: "Failed to convert recordings to JSON array".to_string(),
+            status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+        })
+    }
+}
+
+// Handler for getting schedules by camera ID
+async fn get_schedules_by_camera(
+    State(state): State<AppState>,
+    Path(camera_id): Path<Uuid>,
+) -> ApiResult<Json<Vec<RecordingSchedule>>> {
+    // Get schedules for the camera from repository
+    let schedules = state.schedules_repo.get_by_camera(&camera_id).await?;
+    Ok(Json(schedules))
+}
+
+// Schedule API handlers
+async fn get_schedules(State(state): State<AppState>) -> ApiResult<Json<Vec<RecordingSchedule>>> {
+    // Get all schedules from repository
+    let schedules = state.schedules_repo.get_all().await?;
+    Ok(Json(schedules))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateScheduleRequest {
+    camera_id: Uuid,
+    stream_id: Uuid,
+    name: String,
+    enabled: bool,
+    days_of_week: Vec<i32>,
+    start_time: String,
+    end_time: String,
+    retention_days: i32,
+}
+
+async fn create_schedule(
+    State(state): State<AppState>,
+    Json(req): Json<CreateScheduleRequest>,
+) -> ApiResult<Json<RecordingSchedule>> {
+    // Validate time format (HH:MM)
+    let time_regex = regex::Regex::new(r"^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$").unwrap();
+    if !time_regex.is_match(&req.start_time) || !time_regex.is_match(&req.end_time) {
+        return Err(ApiError {
+            message: "Invalid time format. Use HH:MM format (24-hour)".to_string(),
+            status: StatusCode::BAD_REQUEST.as_u16(),
+        });
+    }
+
+    // Validate days of week (0-6)
+    for day in &req.days_of_week {
+        if *day < 0 || *day > 6 {
+            return Err(ApiError {
+                message: "Days of week must be between 0 (Sunday) and 6 (Saturday)".to_string(),
+                status: StatusCode::BAD_REQUEST.as_u16(),
+            });
+        }
+    }
+
+    // Create schedule object
+    let now = Utc::now();
+    let schedule = RecordingSchedule {
+        id: Uuid::new_v4(),
+        camera_id: req.camera_id,
+        stream_id: req.stream_id,
+        name: req.name,
+        enabled: req.enabled,
+        days_of_week: req.days_of_week,
+        start_time: req.start_time,
+        end_time: req.end_time,
+        created_at: now,
+        updated_at: now,
+        retention_days: req.retention_days,
+    };
+
+    // Create schedule in repository
+    let created_schedule = state.schedules_repo.create(&schedule).await?;
+    Ok(Json(created_schedule))
+}
+
+async fn get_schedule_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<RecordingSchedule>> {
+    // Get schedule by ID
+    let schedule = state
+        .schedules_repo
+        .get_by_id(&id)
+        .await?
+        .ok_or_else(|| ApiError {
+            message: format!("Schedule not found: {}", id),
+            status: StatusCode::NOT_FOUND.as_u16(),
+        })?;
+
+    Ok(Json(schedule))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateScheduleRequest {
+    camera_id: Option<Uuid>,
+    stream_id: Option<Uuid>,
+    name: Option<String>,
+    enabled: Option<bool>,
+    days_of_week: Option<Vec<i32>>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    retention_days: Option<i32>,
+}
+
+async fn update_schedule(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateScheduleRequest>,
+) -> ApiResult<Json<RecordingSchedule>> {
+    // First get the existing schedule
+    let mut schedule = state
+        .schedules_repo
+        .get_by_id(&id)
+        .await?
+        .ok_or_else(|| ApiError {
+            message: format!("Schedule not found: {}", id),
+            status: StatusCode::NOT_FOUND.as_u16(),
+        })?;
+
+    // Update fields if provided
+    if let Some(camera_id) = req.camera_id {
+        schedule.camera_id = camera_id;
+    }
+
+    if let Some(stream_id) = req.stream_id {
+        schedule.stream_id = stream_id;
+    }
+
+    if let Some(name) = req.name {
+        schedule.name = name;
+    }
+
+    if let Some(enabled) = req.enabled {
+        schedule.enabled = enabled;
+    }
+
+    if let Some(days_of_week) = req.days_of_week {
+        // Validate days of week (0-6)
+        for day in &days_of_week {
+            if *day < 0 || *day > 6 {
+                return Err(ApiError {
+                    message: "Days of week must be between 0 (Sunday) and 6 (Saturday)".to_string(),
+                    status: StatusCode::BAD_REQUEST.as_u16(),
+                });
+            }
+        }
+        schedule.days_of_week = days_of_week;
+    }
+
+    if let Some(start_time) = req.start_time {
+        // Validate time format (HH:MM)
+        let time_regex = regex::Regex::new(r"^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$").unwrap();
+        if !time_regex.is_match(&start_time) {
+            return Err(ApiError {
+                message: "Invalid start time format. Use HH:MM format (24-hour)".to_string(),
+                status: StatusCode::BAD_REQUEST.as_u16(),
+            });
+        }
+        schedule.start_time = start_time;
+    }
+
+    if let Some(end_time) = req.end_time {
+        // Validate time format (HH:MM)
+        let time_regex = regex::Regex::new(r"^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$").unwrap();
+        if !time_regex.is_match(&end_time) {
+            return Err(ApiError {
+                message: "Invalid end time format. Use HH:MM format (24-hour)".to_string(),
+                status: StatusCode::BAD_REQUEST.as_u16(),
+            });
+        }
+        schedule.end_time = end_time;
+    }
+
+    if let Some(retention_days) = req.retention_days {
+        schedule.retention_days = retention_days;
+    }
+
+    // Update timestamp
+    schedule.updated_at = Utc::now();
+
+    // Update schedule in repository
+    let updated_schedule = state.schedules_repo.update(&schedule).await?;
+    Ok(Json(updated_schedule))
+}
+
+async fn delete_schedule(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<bool>> {
+    // Delete schedule by ID
+    let result = state.schedules_repo.delete(&id).await?;
+    Ok(Json(result))
+}
+
+#[derive(Debug, Deserialize)]
+struct ScheduleEnabledRequest {
+    enabled: bool,
+}
+
+async fn set_schedule_enabled(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ScheduleEnabledRequest>,
+) -> ApiResult<Json<()>> {
+    // Check if schedule exists first
+    let _ = state
+        .schedules_repo
+        .get_by_id(&id)
+        .await?
+        .ok_or_else(|| ApiError {
+            message: format!("Schedule not found: {}", id),
+            status: StatusCode::NOT_FOUND.as_u16(),
+        })?;
+
+    // Set schedule enabled status
+    state.schedules_repo.set_enabled(&id, req.enabled).await?;
+
     Ok(Json(()))
 }
