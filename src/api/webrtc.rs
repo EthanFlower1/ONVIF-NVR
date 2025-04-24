@@ -674,18 +674,18 @@ async fn clean_up_gstreamer_elements(session_id: &str, state: &Arc<WebRTCState>)
                     "No more active connections for stream {}, stopping pipeline",
                     stream_id
                 );
-                if let Err(e) = pipeline.set_state(gst::State::Paused) {
-                    warn!("Failed to set pipeline to NULL state: {:?}", e);
-                } else {
-                    info!("Successfully set pipeline to NULL state");
-
-                    // Remove the stream entirely
-                    // if let Err(e) = state.stream_manager.remove_stream(&stream_id) {
-                    //     warn!("Failed to remove stream: {:?}", e);
-                    // } else {
-                    //     info!("Successfully removed stream: {}", stream_id);
-                    // }
-                }
+                // if let Err(e) = pipeline.set_state(gst::State::Paused) {
+                //     warn!("Failed to set pipeline to NULL state: {:?}", e);
+                // } else {
+                //     info!("Successfully set pipeline to NULL state");
+                //
+                //     // Remove the stream entirely
+                //     // if let Err(e) = state.stream_manager.remove_stream(&stream_id) {
+                //     //     warn!("Failed to remove stream: {:?}", e);
+                //     // } else {
+                //     //     info!("Successfully removed stream: {}", stream_id);
+                //     // }
+                // }
             }
         }
     }
