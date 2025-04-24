@@ -32,6 +32,8 @@ import {
   UserCircleIcon,
   SignalIcon,
   VideoCameraIcon,
+  FilmIcon,
+  CalendarIcon
 } from '@heroicons/react/16/solid'
 import {
   Cog6ToothIcon,
@@ -141,9 +143,13 @@ export function ApplicationLayout({
                 <VideoCameraIcon />
                 <SidebarLabel>Cameras</SidebarLabel>
               </SidebarItem>
-              <SidebarItem href="/orders" current={pathname.startsWith('/orders')}>
-                <TicketIcon />
-                <SidebarLabel>Orders</SidebarLabel>
+              <SidebarItem href="/recordings" current={pathname.startsWith('/recordings')}>
+                <FilmIcon />
+                <SidebarLabel>Recordings</SidebarLabel>
+              </SidebarItem>
+              <SidebarItem href="/recording-schedules" current={pathname.startsWith('/recording-schedules')}>
+                <CalendarIcon />
+                <SidebarLabel>Recording Schedules</SidebarLabel>
               </SidebarItem>
               <SidebarItem href="/settings" current={pathname.startsWith('/settings')}>
                 <Cog6ToothIcon />

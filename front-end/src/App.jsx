@@ -4,6 +4,8 @@ import Login from './pages/login.tsx'
 import Cameras from './pages/cameras.tsx'
 import DeviceDiscovery from './pages/discovery.tsx'
 import Liveview from './pages/live-view.tsx'
+import Recordings from './pages/recordings.tsx'
+import RecordingSchedules from './pages/recording-schedules.tsx'
 import './App.css'
 
 // Placeholder Home component
@@ -30,14 +32,6 @@ const Events = () => (
   </div>
 )
 
-// Placeholder Orders component
-const Orders = () => (
-  <div>
-    <h1 className="text-2xl font-bold mb-4">Orders</h1>
-    <p>Manage your orders here.</p>
-  </div>
-)
-
 function App() {
   return (
     <Routes>
@@ -52,7 +46,8 @@ function App() {
       <Route path="/events" element={<Layout><Events /></Layout>} />
       <Route path="/cameras" element={<Layout><Cameras /></Layout>} />
       <Route path="/discovery" element={<Layout><DeviceDiscovery /></Layout>} />
-      <Route path="/orders" element={<Layout><Orders /></Layout>} />
+      <Route path="/recordings" element={<Layout><Recordings /></Layout>} />
+      <Route path="/recording-schedules" element={<Layout><RecordingSchedules /></Layout>} />
 
       {/* Catch-all route - redirect to home */}
       <Route path="*" element={<Navigate to="/" replace />} />
