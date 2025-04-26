@@ -6,6 +6,8 @@ import { Badge } from "../components/badge";
 import { Dialog } from "../components/dialog";
 import { Heading } from "../components/heading";
 import { Text } from "../components/text";
+import { Select } from "../components/select";
+import { Input } from "../components/input";
 
 // Recording type interface
 interface Recording {
@@ -137,11 +139,14 @@ export default function Recordings() {
   };
 
   // Format duration in seconds to HH:MM:SS
-  const formatDuration = (seconds: number) => {
-    if (seconds === 0) return "In progress";
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
+  const formatDuration = (milliseconds: number) => {
+    if (milliseconds === 0) return "In progress";
+
+    const totalSeconds = Math.floor(milliseconds / 1000);
+    const hrs = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = Math.floor(totalSeconds % 60);
+
     return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
@@ -199,7 +204,7 @@ export default function Recordings() {
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-indigo-500 border-t-transparent mb-2"></div>
-          <p className="text-gray-600">Loading recordings...</p>
+          <p >Loading recordings...</p>
         </div>
       </div>
     );
@@ -214,11 +219,10 @@ export default function Recordings() {
 
       {/* Search Form */}
       <div className="p-4 rounded-lg shadow mb-6">
-        <Heading level={3} className="mb-4">Search Recordings</Heading>
         <form onSubmit={handleSearchSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label htmlFor="camera_id" className="block text-sm font-medium  mb-1">Camera</label>
-            <select
+            <Text className="block text-sm font-medium  mb-1">Camera</Text>
+            <Select
               id="camera_id"
               name="camera_id"
               className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
@@ -231,12 +235,12 @@ export default function Recordings() {
                   {camera.camera.name || `Camera ${camera.camera.id.substring(0, 8)}`}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
           <div>
-            <label htmlFor="event_type" className="block text-sm font-medium  mb-1">Event Type</label>
-            <select
+            <Text className="block text-sm font-medium  mb-1">Event Type</Text>
+            <Select
               id="event_type"
               name="event_type"
               className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
@@ -250,12 +254,12 @@ export default function Recordings() {
               <option value="manual">Manual</option>
               <option value="analytics">Analytics</option>
               <option value="external">External</option>
-            </select>
+            </Select>
           </div>
 
           <div>
-            <label htmlFor="start_time" className="block text-sm font-medium  mb-1">Start Date</label>
-            <input
+            <Text className="block text-sm font-medium  mb-1">Start Date</Text>
+            <Input
               type="datetime-local"
               id="start_time"
               name="start_time"
@@ -266,8 +270,8 @@ export default function Recordings() {
           </div>
 
           <div>
-            <label htmlFor="end_time" className="block text-sm font-medium mb-1">End Date</label>
-            <input
+            <Text className="block text-sm font-medium mb-1">End Date</Text>
+            <Input
               type="datetime-local"
               id="end_time"
               name="end_time"
@@ -278,8 +282,8 @@ export default function Recordings() {
           </div>
 
           <div>
-            <label htmlFor="limit" className="block text-sm font-medium mb-1">Limit</label>
-            <input
+            <Text className="block text-sm font-medium mb-1">Limit</Text>
+            <Input
               type="number"
               id="limit"
               name="limit"
@@ -298,9 +302,9 @@ export default function Recordings() {
       </div>
 
       {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+        <Text className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
           {error}
-        </div>
+        </Text>
       )}
 
       {/* Recordings Table */}

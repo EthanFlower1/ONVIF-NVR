@@ -18,7 +18,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Err
         .map(|entry| entry.path())
         .collect::<Vec<_>>();
 
-    info!("Files collectiong: {:?}", entries);
+    info!("Files collection: {:?}", entries);
     // Custom sorting logic to handle special files
     entries.sort_by(|a, b| {
         let a_name = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -50,6 +50,22 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Err
         println!("Applied migration: {}", path.display());
     }
 
+    Ok(())
+}
+
+/// Run a specific migration file by name
+pub async fn run_single_migration(pool: &PgPool, migration_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let migrations_dir = "/Users/ethanflower/projects/g-streamer/src/db/migrations/sql";
+    let migration_path = Path::new(migrations_dir).join(migration_name);
+    
+    if !migration_path.exists() || !migration_path.is_file() {
+        return Err(format!("Migration file {} not found", migration_name).into());
+    }
+    
+    info!("Running single migration: {}", migration_name);
+    execute_migration_file(pool, &migration_path).await?;
+    println!("Applied migration: {}", migration_path.display());
+    
     Ok(())
 }
 

@@ -5,8 +5,10 @@ use crate::error::Error;
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use log::{error, info, warn};
+use crate::messaging::broker::MessageBrokerTrait;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
 use uuid::Uuid;
 
@@ -37,7 +39,7 @@ impl StorageCleanupService {
     pub async fn set_message_broker(&self, broker: Arc<crate::messaging::MessageBroker>) -> Result<()> {
         // Safely update the message broker through the mutex
         {
-            let mut broker_guard = self.message_broker.lock().unwrap();
+            let mut broker_guard = self.message_broker.lock().await;
             *broker_guard = Some(broker.clone());
         }
         
@@ -82,7 +84,7 @@ impl StorageCleanupService {
         info!("Running storage cleanup process");
         
         // Publish cleanup started event
-        if let Some(broker) = self.message_broker.lock().unwrap().as_ref() {
+        if let Some(broker) = self.message_broker.lock().await.as_ref() {
             if let Err(e) = broker.publish(
                 crate::messaging::EventType::StorageCleanupStarted,
                 None,
@@ -104,7 +106,7 @@ impl StorageCleanupService {
         };
         
         // Publish cleanup completed event
-        if let Some(broker) = self.message_broker.lock().unwrap().as_ref() {
+        if let Some(broker) = self.message_broker.lock().await.as_ref() {
             if let Err(e) = broker.publish(
                 crate::messaging::EventType::StorageCleanupCompleted,
                 None,

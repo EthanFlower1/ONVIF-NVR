@@ -71,16 +71,27 @@ export default function Cameras() {
     // For now, we'll just update the local state
     setData(data.map(item => {
       if (item.camera.id === id) {
+        const camera = {
+          ...item.camera,
+          name: editedData.name || `Camera ${data.indexOf(item) + 1}`,
+          username: editedData.username,
+          password: editedData.password
+        };
+
+        fetch(`http://localhost:4750/api/cameras/${camera.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(camera)
+        });
+
         return {
           ...item,
-          camera: {
-            ...item.camera,
-            name: editedData.name || `Camera ${data.indexOf(item) + 1}`,
-            username: editedData.username,
-            password: editedData.password
-          }
+          camera,
         };
       }
+
       return item;
     }));
     setEditingId(null);

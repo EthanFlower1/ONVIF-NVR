@@ -84,7 +84,7 @@ impl RecordingScheduler {
             // Check if already recording this schedule
             if self
                 .recording_manager
-                .is_recording_active(&schedule.id, &stream.id)
+                .is_recording_active(&schedule.id, &stream.id).await
             {
                 // Already recording, mark as should be recording
                 should_be_recording.insert(format!("{}-{}", schedule.id, stream.id), true);
@@ -129,7 +129,7 @@ impl RecordingScheduler {
             // Check if currently recording
             if self
                 .recording_manager
-                .is_recording_active(&schedule.id, &schedule.stream_id)
+                .is_recording_active(&schedule.id, &schedule.stream_id).await
             {
                 // Stop recording
                 match self

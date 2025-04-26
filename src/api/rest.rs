@@ -10,13 +10,13 @@ use crate::db::repositories::cameras::CamerasRepository;
 use crate::db::repositories::recordings::RecordingsRepository;
 use crate::db::repositories::schedules::SchedulesRepository;
 use crate::db::repositories::users::UsersRepository;
-use crate::device_manager;
 use crate::device_manager::onvif_client::{OnvifCameraBuilder, OnvifError};
 use crate::error::Error;
 use crate::recorder::record::RecordingManager;
 use crate::security::auth::AuthService;
-use crate::stream_manager::StreamManager;
+use crate::stream_manager::{StreamManager, StreamSource};
 use crate::{config::ApiConfig, db::models::camera_models::Camera};
+use crate::{device_manager, stream_manager};
 use anyhow::Result;
 use axum::routing::{delete, get, put};
 use axum::{
@@ -27,7 +27,7 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
-use log::info;
+use log::{info, warn};
 use regex;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -397,6 +397,61 @@ async fn camera_connect(
         stream_references,
     };
 
+    // Clone what we need to pass to the thread
+    let stream_manager = state.stream_manager.clone();
+    let streams_for_thread = camera_with_streams.streams.clone();
+    let username = camera_with_streams
+        .camera
+        .username
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("Camera username is missing"))?;
+    let password = camera_with_streams
+        .camera
+        .password
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("Camera password is missing"))?;
+
+    // Spawn a new thread to handle stream connections
+    tokio::spawn(async move {
+        for stream in streams_for_thread {
+            // Parse the original URL to insert username and password
+            let stream_uri = stream.url.to_string();
+
+            // Check if URL already contains credentials
+            let auth_uri = if stream_uri.contains('@') {
+                // URL already has credentials, use as is
+                stream_uri
+            } else {
+                // URL doesn't have credentials, add them
+                if stream_uri.starts_with("rtsp://") {
+                    format!("rtsp://{}:{}@{}", username, password, &stream_uri[7..])
+                } else {
+                    // Handle non-RTSP URLs or malformed URLs
+                    warn!("Invalid RTSP URL format: {}", stream_uri);
+                    stream_uri
+                }
+            };
+
+            info!("Connecting to camera URL: {}", auth_uri.clone());
+
+            let source = StreamSource {
+                stream_type: stream.stream_type,
+                uri: auth_uri,
+                name: stream.name.clone(),
+                description: Some("RTSP stream".to_string()),
+            };
+
+            match stream_manager.add_stream(source, stream.id.to_string()) {
+                Ok(stream_id) => {
+                    println!("Created stream with ID: {}", stream_id);
+                }
+                Err(e) => {
+                    warn!("Failed to add stream: {}", e);
+                }
+            }
+        }
+    });
+
     let db_response = state
         .cameras_repo
         .create_with_streams(&camera_with_streams)
@@ -416,10 +471,14 @@ async fn get_camera_by_id(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Camera>> {
-    let camera = state.cameras_repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
-        message: format!("Camera not found: {}", id),
-        status: StatusCode::NOT_FOUND.as_u16(),
-    })?;
+    let camera = state
+        .cameras_repo
+        .get_by_id(&id)
+        .await?
+        .ok_or_else(|| ApiError {
+            message: format!("Camera not found: {}", id),
+            status: StatusCode::NOT_FOUND.as_u16(),
+        })?;
 
     Ok(Json(camera))
 }
@@ -446,10 +505,14 @@ async fn update_camera(
     Path(id): Path<Uuid>,
     Json(req): Json<CameraUpdateRequest>,
 ) -> ApiResult<Json<Camera>> {
-    let mut camera = state.cameras_repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
-        message: format!("Camera not found: {}", id),
-        status: StatusCode::NOT_FOUND.as_u16(),
-    })?;
+    let mut camera = state
+        .cameras_repo
+        .get_by_id(&id)
+        .await?
+        .ok_or_else(|| ApiError {
+            message: format!("Camera not found: {}", id),
+            status: StatusCode::NOT_FOUND.as_u16(),
+        })?;
 
     // Track if credentials are being updated
     let mut credentials_updated = false;
@@ -531,7 +594,14 @@ async fn update_camera_status(
     Json(req): Json<CameraStatusUpdateRequest>,
 ) -> ApiResult<Json<Camera>> {
     // Validate status value
-    let valid_statuses = ["discovered", "connected", "active", "inactive", "error", "offline"];
+    let valid_statuses = [
+        "discovered",
+        "connected",
+        "active",
+        "inactive",
+        "error",
+        "offline",
+    ];
     if !valid_statuses.contains(&req.status.as_str()) {
         return Err(ApiError {
             message: format!(
@@ -543,25 +613,35 @@ async fn update_camera_status(
     }
 
     // Get the camera to update
-    let mut camera = state.cameras_repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
-        message: format!("Camera not found: {}", id),
-        status: StatusCode::NOT_FOUND.as_u16(),
-    })?;
+    let mut camera = state
+        .cameras_repo
+        .get_by_id(&id)
+        .await?
+        .ok_or_else(|| ApiError {
+            message: format!("Camera not found: {}", id),
+            status: StatusCode::NOT_FOUND.as_u16(),
+        })?;
 
     // Update the status
     camera.status = req.status;
-    
+
     // Use the repository method specifically for status update if complex logic needed,
     // or just update the camera object
-    state.cameras_repo.update_status(&id, &camera.status).await?;
-    
+    state
+        .cameras_repo
+        .update_status(&id, &camera.status)
+        .await?;
+
     // Fetch the updated camera to return the latest state
-    let updated_camera = state.cameras_repo.get_by_id(&id).await?
+    let updated_camera = state
+        .cameras_repo
+        .get_by_id(&id)
+        .await?
         .ok_or_else(|| ApiError {
             message: format!("Camera not found after update: {}", id),
             status: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
         })?;
-    
+
     Ok(Json(updated_camera))
 }
 
@@ -570,38 +650,47 @@ async fn refresh_camera_details(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<CameraWithStreams>> {
     // Get existing camera
-    let camera = state.cameras_repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
-        message: format!("Camera not found: {}", id),
-        status: StatusCode::NOT_FOUND.as_u16(),
-    })?;
-    
+    let camera = state
+        .cameras_repo
+        .get_by_id(&id)
+        .await?
+        .ok_or_else(|| ApiError {
+            message: format!("Camera not found: {}", id),
+            status: StatusCode::NOT_FOUND.as_u16(),
+        })?;
+
     // Ensure we have credentials
     let username = camera.username.clone().ok_or_else(|| ApiError {
         message: "Camera username is missing".to_string(),
         status: StatusCode::BAD_REQUEST.as_u16(),
     })?;
-    
+
     let password = camera.password.clone().ok_or_else(|| ApiError {
         message: "Camera password is missing".to_string(),
         status: StatusCode::BAD_REQUEST.as_u16(),
     })?;
-    
+
     // Create ONVIF client to get fresh device information
     let client = OnvifCameraBuilder::new()
         .uri(&format!("http://{}", &camera.ip_address))?
         .credentials(&username, &password)
-        .service_path(camera.onvif_endpoint.as_deref().unwrap_or("onvif/device_service"))
+        .service_path(
+            camera
+                .onvif_endpoint
+                .as_deref()
+                .unwrap_or("onvif/device_service"),
+        )
         .fix_time(true)
         .auth_type("digest")
         .build()
         .await?;
-    
+
     // Get updated device information
     let device_info = client.get_device_information().await?;
-    
+
     // Get stream URIs
     let stream_uris = client.get_stream_uris().await?;
-    
+
     // Create an updated camera with streams object
     let mut updated_camera = camera.clone();
     updated_camera.manufacturer = Some(device_info.manufacturer);
@@ -611,19 +700,19 @@ async fn refresh_camera_details(
     updated_camera.hardware_id = Some(device_info.hardware_id);
     updated_camera.updated_at = Utc::now();
     updated_camera.last_updated = Some(Utc::now());
-    
+
     // Get existing streams for this camera
     let existing_streams = state.cameras_repo.get_streams(&id).await?;
     let mut streams = Vec::new();
     let mut stream_references = Vec::new();
-    
+
     // Update existing streams or create new ones
     for (i, stream_response) in stream_uris.iter().enumerate() {
         let now = Utc::now();
-        
+
         // Try to find an existing stream to update
         let stream_exists = i < existing_streams.len();
-        
+
         let mut stream = if stream_exists {
             let mut existing = existing_streams[i].clone();
             existing.camera_id = updated_camera.id;
@@ -645,21 +734,22 @@ async fn refresh_camera_details(
             new_stream.framerate = stream_response.framerate.map(|value| value as i32);
             new_stream.bitrate = stream_response.bitrate.map(|value| value as i32);
             new_stream.audio_bitrate = stream_response.audio_bitrate.map(|value| value as i32);
-            new_stream.audio_sample_rate = stream_response.audio_samplerate.map(|value| value as i32);
+            new_stream.audio_sample_rate =
+                stream_response.audio_samplerate.map(|value| value as i32);
             new_stream.audio_codec = stream_response.audio_encoding.clone();
             new_stream
         };
-        
+
         if let Some((width, height)) = stream_response.video_resolution {
             stream.width = Some(width as i32);
             stream.height = Some(height as i32);
             stream.resolution = Some(format!("{}x{}", width, height));
         }
-        
+
         // Set stream type and primary flag
         stream.is_primary = Some(i == 0);
         stream.updated_at = now;
-        
+
         // Add stream reference if it's a new stream
         if !stream_exists {
             let stream_ref = StreamReference {
@@ -682,50 +772,75 @@ async fn refresh_camera_details(
             };
             stream_references.push(stream_ref);
         }
-        
+
         streams.push(stream);
     }
-    
+
     // Create camera with streams object for update
     let camera_with_streams = CameraWithStreams {
         camera: updated_camera,
         streams,
         stream_references,
     };
-    
+
     // Update camera and streams in database
-    let updated = state.cameras_repo.update_with_streams(&camera_with_streams).await?;
-    
+    let updated = state
+        .cameras_repo
+        .update_with_streams(&camera_with_streams)
+        .await?;
+
     info!("Successfully refreshed camera details for {}", id);
     Ok(Json(updated))
 }
 
-async fn delete_camera(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Json<serde_json::Value>> {
+async fn delete_camera(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
     // Check if camera exists first
-    let camera = state.cameras_repo.get_by_id(&id).await?.ok_or_else(|| ApiError {
-        message: format!("Camera not found: {}", id),
-        status: StatusCode::NOT_FOUND.as_u16(),
-    })?;
-    
+    let camera = state
+        .cameras_repo
+        .get_by_id(&id)
+        .await?
+        .ok_or_else(|| ApiError {
+            message: format!("Camera not found: {}", id),
+            status: StatusCode::NOT_FOUND.as_u16(),
+        })?;
+
     // Get existing streams and stop any active recordings
     let streams = state.cameras_repo.get_streams(&id).await?;
-    
+
     // Stop any active recordings for this camera
     for stream in &streams {
         if let Some(is_active) = stream.is_active {
             if is_active {
                 // Try to stop recording, but don't fail if it doesn't work
-                match state.recording_manager.stop_recording(&camera.id, &stream.id).await {
-                    Ok(_) => info!("Stopped recording for stream {} before camera deletion", stream.id),
+                match state
+                    .recording_manager
+                    .stop_recording(&camera.id, &stream.id)
+                    .await
+                {
+                    Ok(_) => info!(
+                        "Stopped recording for stream {} before camera deletion",
+                        stream.id
+                    ),
                     Err(e) => info!("Failed to stop recording for stream {}: {}", stream.id, e),
                 }
             }
         }
     }
-    
+
     // Delete camera and all related data
     let result = state.cameras_repo.delete(&id).await?;
-    
+
+    // Publish camera deleted event
+    let camera_events = crate::messaging::CameraEvents::new(state.message_broker.clone());
+    if let Err(e) = camera_events.camera_deleted(id, &camera.name).await {
+        warn!("Failed to publish camera deleted event: {}", e);
+    } else {
+        info!("Published camera deleted event for {}", id);
+    }
+
     Ok(Json(serde_json::json!({
         "success": result,
         "id": id.to_string(),
@@ -904,6 +1019,12 @@ async fn search_recordings(
         event_types: None,
         schedule_id: None,
         min_duration: None,
+        segment_id: params.segment_id,
+        parent_recording_id: params
+            .parent_recording_id
+            .as_ref()
+            .and_then(|id| Uuid::parse_str(id).ok()),
+        is_segment: params.is_segment,
         limit: params.limit,
         offset: params.offset,
     };
@@ -1023,6 +1144,9 @@ async fn get_recordings_by_camera(
         event_types: None,
         schedule_id: None,
         min_duration: None,
+        segment_id: None,
+        parent_recording_id: None,
+        is_segment: Some(false), // Only return parent recordings
         limit: Some(100),
         offset: Some(0),
     };
@@ -1260,3 +1384,4 @@ async fn set_schedule_enabled(
 
     Ok(Json(()))
 }
+

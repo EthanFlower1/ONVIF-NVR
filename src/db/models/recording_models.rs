@@ -26,7 +26,7 @@ impl std::fmt::Display for RecordingEventType {
         match self {
             RecordingEventType::Continuous => write!(f, "continuous"),
             RecordingEventType::Motion => write!(f, "motion"),
-            RecordingEventType::Audio => write!(f, "audio"), 
+            RecordingEventType::Audio => write!(f, "audio"),
             RecordingEventType::External => write!(f, "external"),
             RecordingEventType::Manual => write!(f, "manual"),
             RecordingEventType::Analytics => write!(f, "analytics"),
@@ -93,6 +93,20 @@ pub struct Recording {
     pub event_type: RecordingEventType,
     pub metadata: Option<serde_json::Value>,
     pub schedule_id: Option<Uuid>,
+    pub segment_id: Option<u32>, // Numeric segment ID (fragment index)
+    pub parent_recording_id: Option<Uuid>, // Optional parent recording ID for segments
+}
+
+/// Model for updating recording data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordingUpdate {
+    pub file_path: Option<PathBuf>,
+    pub duration: Option<u64>,
+    pub file_size: Option<u64>,
+    pub end_time: Option<DateTime<Utc>>,
+    pub metadata: Option<serde_json::Value>,
+    pub segment_id: Option<u32>,
+    pub parent_recording_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -111,6 +125,8 @@ pub struct RecordingDb {
     pub event_type: RecordingEventType,
     pub metadata: Option<serde_json::Value>,
     pub schedule_id: Option<Uuid>,
+    pub segment_id: Option<i32>,
+    pub parent_recording_id: Option<Uuid>,
 }
 
 impl From<RecordingDb> for Recording {
@@ -130,6 +146,8 @@ impl From<RecordingDb> for Recording {
             event_type: db.event_type,
             metadata: db.metadata,
             schedule_id: db.schedule_id,
+            segment_id: db.segment_id.map(|id| id as u32),
+            parent_recording_id: db.parent_recording_id,
         }
     }
 }
@@ -151,6 +169,8 @@ impl From<Recording> for RecordingDb {
             event_type: r.event_type,
             metadata: r.metadata,
             schedule_id: r.schedule_id,
+            segment_id: r.segment_id.map(|id| id as i32),
+            parent_recording_id: r.parent_recording_id,
         }
     }
 }
@@ -165,6 +185,9 @@ pub struct RecordingSearchQuery {
     pub event_types: Option<Vec<RecordingEventType>>,
     pub schedule_id: Option<Uuid>,
     pub min_duration: Option<u64>,
+    pub segment_id: Option<u32>,
+    pub parent_recording_id: Option<Uuid>,
+    pub is_segment: Option<bool>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -180,6 +203,9 @@ impl Default for RecordingSearchQuery {
             event_types: None,
             schedule_id: None,
             min_duration: None,
+            segment_id: None,
+            parent_recording_id: None,
+            is_segment: None,
             limit: None,
             offset: None,
         }

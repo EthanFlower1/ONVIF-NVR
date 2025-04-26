@@ -1,7 +1,7 @@
 use crate::{
     db::models::recording_models::{
         Recording, RecordingDb, RecordingEventType, RecordingSearchQuery, RecordingStats,
-        RecordingStatsDb,
+        RecordingStatsDb, RecordingUpdate,
     },
     error::Error,
 };
@@ -15,7 +15,7 @@ use uuid::Uuid;
 /// Recordings repository for handling recording operations
 #[derive(Clone)]
 pub struct RecordingsRepository {
-    pool: Arc<PgPool>,
+    pub pool: Arc<PgPool>,
 }
 
 impl RecordingsRepository {
@@ -33,12 +33,12 @@ impl RecordingsRepository {
             INSERT INTO recordings (
                 id, camera_id, stream_id, schedule_id, start_time, end_time, 
                 file_path, file_size, duration, format, resolution, fps, 
-                event_type, created_at, metadata
+                event_type, created_at, metadata, segment_id, parent_recording_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             RETURNING id, camera_id, stream_id, schedule_id, start_time, end_time, 
                      file_path, file_size, duration, format, resolution, fps,
-                     event_type, metadata
+                     event_type, metadata, segment_id, parent_recording_id
             "#,
         )
         .bind(recording_db.id)
@@ -56,6 +56,8 @@ impl RecordingsRepository {
         .bind(recording_db.event_type)
         .bind(Utc::now())
         .bind(&recording_db.metadata)
+        .bind(recording_db.segment_id)
+        .bind(recording_db.parent_recording_id)
         .fetch_one(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to create recording: {}", e)))?;
@@ -63,12 +65,45 @@ impl RecordingsRepository {
         Ok(Recording::from(result))
     }
 
+    /// Search recordings by JSON metadata
+    /// The json_query is a JSON object string containing key-value pairs to search for
+    /// For example: {"parent_recording_id": "123e4567-e89b-12d3-a456-426614174000"}
+    pub async fn search_by_metadata(&self, json_query: &str) -> Result<Vec<Recording>> {
+        // Parse the JSON query string to ensure it's valid
+        let json_value = serde_json::from_str::<serde_json::Value>(json_query)
+            .map_err(|e| Error::InvalidInput(format!("Invalid JSON query: {}", e)))?;
+
+        // Ensure we have a JSON object
+        if !json_value.is_object() {
+            return Err(Error::InvalidInput("JSON query must be an object".into()).into());
+        }
+
+        // Build the SQL query to search for recordings with matching metadata
+        let sql = r#"
+            SELECT id, camera_id, stream_id, schedule_id, start_time, end_time, file_path, file_size,
+                   duration, format, resolution, fps, event_type, metadata
+            FROM recordings
+            WHERE metadata @> $1::jsonb
+        "#;
+
+        // Execute the query with the JSON string as a parameter
+        let result = sqlx::query_as::<_, RecordingDb>(sql)
+            .bind(json_query)
+            .fetch_all(&*self.pool)
+            .await
+            .map_err(|e| {
+                Error::Database(format!("Failed to search recordings by metadata: {}", e))
+            })?;
+
+        Ok(result.into_iter().map(Recording::from).collect())
+    }
+
     /// Get recording by ID
     pub async fn get_by_id(&self, id: &Uuid) -> Result<Option<Recording>> {
         let result = sqlx::query_as::<_, RecordingDb>(
             r#"
             SELECT id, camera_id, stream_id, schedule_id, start_time, end_time, file_path, file_size,
-                   duration, format, resolution, fps, event_type, metadata
+                   duration, format, resolution, fps, event_type, metadata, segment_id, parent_recording_id
             FROM recordings
             WHERE id = $1
             "#,
@@ -81,26 +116,162 @@ impl RecordingsRepository {
         Ok(result.map(Recording::from))
     }
 
+    /// Get recording by parent_recording_id and segment_id
+    pub async fn get_segment(&self, file_path: &String) -> Result<Option<Recording>> {
+        let result = sqlx::query_as::<_, RecordingDb>(
+            r#"
+            SELECT id, camera_id, stream_id, schedule_id, start_time, end_time, file_path, file_size,
+                   duration, format, resolution, fps, event_type, metadata, segment_id, parent_recording_id
+            FROM recordings
+            WHERE file_path = $1 
+            "#,
+        )
+        .bind(file_path)
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get segment recording: {}", e)))?;
+
+        Ok(result.map(Recording::from))
+    }
+
     /// Update recording
     pub async fn update(&self, recording: &Recording) -> Result<Recording> {
         let recording_db = RecordingDb::from(recording.clone());
         let result = sqlx::query_as::<_, RecordingDb>(
             r#"
             UPDATE recordings
-            SET end_time = $1, file_size = $2, duration = $3, metadata = $4
-            WHERE id = $5
+            SET end_time = $1, file_size = $2, duration = $3, metadata = $4,
+                segment_id = $5, parent_recording_id = $6
+            WHERE id = $7
             RETURNING id, camera_id, stream_id, schedule_id, start_time, end_time, file_path, file_size,
-                     duration, format, resolution, fps, event_type, metadata
+                     duration, format, resolution, fps, event_type, metadata, segment_id, parent_recording_id
             "#,
         )
         .bind(recording_db.end_time)
         .bind(recording_db.file_size)
         .bind(recording_db.duration)
         .bind(&recording_db.metadata)
+        .bind(recording_db.segment_id)
+        .bind(recording_db.parent_recording_id)
         .bind(recording_db.id)
         .fetch_one(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to update recording: {}", e)))?;
+
+        Ok(Recording::from(result))
+    }
+
+    /// Update recording using RecordingUpdate struct
+    pub async fn update_with_data(
+        &self,
+        recording_id: &Uuid,
+        update: RecordingUpdate,
+    ) -> Result<Recording> {
+        // First, get the current recording
+        let current = self.get_by_id(recording_id).await?.ok_or_else(|| {
+            Error::NotFound(format!("Recording with ID {} not found", recording_id))
+        })?;
+
+        // Prepare the update query
+        let mut sql = String::from("UPDATE recordings SET");
+        let mut params = Vec::new();
+        let mut param_index = 1;
+
+        // Add file_path if present
+        if update.file_path.is_some() {
+            sql.push_str(&format!(" file_path = ${}", param_index));
+            param_index += 1;
+            params.push(QueryArg::String(
+                update.file_path.unwrap().to_string_lossy().to_string(),
+            ));
+        }
+
+        // Add duration if present
+        if update.duration.is_some() {
+            if param_index > 1 {
+                sql.push_str(",");
+            }
+            sql.push_str(&format!(" duration = ${}", param_index));
+            param_index += 1;
+            params.push(QueryArg::I64(update.duration.unwrap() as i64));
+        }
+
+        // Add file_size if present
+        if update.file_size.is_some() {
+            if param_index > 1 {
+                sql.push_str(",");
+            }
+            sql.push_str(&format!(" file_size = ${}", param_index));
+            param_index += 1;
+            params.push(QueryArg::I64(update.file_size.unwrap() as i64));
+        }
+
+        // Add end_time if present
+        if update.end_time.is_some() {
+            if param_index > 1 {
+                sql.push_str(",");
+            }
+            sql.push_str(&format!(" end_time = ${}", param_index));
+            param_index += 1;
+            params.push(QueryArg::DateTime(update.end_time.unwrap()));
+        }
+
+        // Add metadata if present
+        if update.metadata.is_some() {
+            if param_index > 1 {
+                sql.push_str(",");
+            }
+            sql.push_str(&format!(" metadata = ${}", param_index));
+            param_index += 1;
+            params.push(QueryArg::Json(update.metadata.unwrap()));
+        }
+
+        // Add segment_id if present
+        if update.segment_id.is_some() {
+            if param_index > 1 {
+                sql.push_str(",");
+            }
+            sql.push_str(&format!(" segment_id = ${}", param_index));
+            param_index += 1;
+            params.push(QueryArg::I32(update.segment_id.unwrap() as i32));
+        }
+
+        // Add parent_recording_id if present
+        if update.parent_recording_id.is_some() {
+            if param_index > 1 {
+                sql.push_str(",");
+            }
+            sql.push_str(&format!(" parent_recording_id = ${}", param_index));
+            param_index += 1;
+            params.push(QueryArg::Uuid(update.parent_recording_id.unwrap()));
+        }
+
+        // Add WHERE clause and RETURNING statement
+        sql.push_str(&format!(" WHERE id = ${}", param_index));
+        params.push(QueryArg::Uuid(*recording_id));
+
+        sql.push_str(
+            " RETURNING id, camera_id, stream_id, schedule_id, start_time, end_time, file_path, file_size,
+                     duration, format, resolution, fps, event_type, metadata, segment_id, parent_recording_id"
+        );
+
+        // If no fields were updated, return the current recording
+        if param_index == 1 {
+            return Ok(current);
+        }
+
+        // Execute the query
+        let mut query_builder = sqlx::query_as::<_, RecordingDb>(&sql);
+
+        // Add parameters
+        for arg in params {
+            query_builder = arg.apply_to_query(query_builder);
+        }
+
+        let result = query_builder
+            .fetch_one(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to update recording: {}", e)))?;
 
         Ok(Recording::from(result))
     }
@@ -149,7 +320,7 @@ impl RecordingsRepository {
         let mut sql = String::from(
             r#"
             SELECT id, camera_id, stream_id, schedule_id, start_time, end_time, file_path, file_size,
-                   duration, format, resolution, fps, event_type, metadata
+                   duration, format, resolution, fps, event_type, metadata, segment_id, parent_recording_id
             FROM recordings
             WHERE 1=1
             "#,
@@ -223,6 +394,29 @@ impl RecordingsRepository {
             sql.push_str(&format!(" AND duration >= ${}", param_index));
             args.push(QueryArg::I64(*min_duration as i64));
             param_index += 1;
+        }
+
+        // Add segment ID filter
+        if let Some(segment_id) = &query.segment_id {
+            sql.push_str(&format!(" AND segment_id = ${}", param_index));
+            args.push(QueryArg::I32(*segment_id as i32));
+            param_index += 1;
+        }
+
+        // Add parent recording ID filter
+        if let Some(parent_id) = &query.parent_recording_id {
+            sql.push_str(&format!(" AND parent_recording_id = ${}", param_index));
+            args.push(QueryArg::Uuid(*parent_id));
+            param_index += 1;
+        }
+
+        // Add is_segment filter
+        if let Some(is_segment) = &query.is_segment {
+            if *is_segment {
+                sql.push_str(" AND parent_recording_id IS NOT NULL");
+            } else {
+                sql.push_str(" AND parent_recording_id IS NULL");
+            }
         }
 
         // Add order by
@@ -463,7 +657,7 @@ impl RecordingsRepository {
         let mut sql = String::from(
             r#"
             SELECT id, camera_id, stream_id, schedule_id, start_time, end_time, file_path, file_size,
-                   duration, format, resolution, fps, event_type, metadata
+                   duration, format, resolution, fps, event_type, metadata, segment_id, parent_recording_id
             FROM recordings
             WHERE 1=1
             "#,
@@ -510,7 +704,10 @@ enum QueryArg {
     Uuid(Uuid),
     DateTime(DateTime<Utc>),
     I64(i64),
+    I32(i32),
+    String(String),
     StringArray(Vec<String>),
+    Json(serde_json::Value),
 }
 
 impl QueryArg {
@@ -523,7 +720,10 @@ impl QueryArg {
             QueryArg::Uuid(uuid) => builder.bind(uuid),
             QueryArg::DateTime(dt) => builder.bind(dt),
             QueryArg::I64(i) => builder.bind(i),
+            QueryArg::I32(i) => builder.bind(i),
+            QueryArg::String(s) => builder.bind(s),
             QueryArg::StringArray(arr) => builder.bind(arr),
+            QueryArg::Json(json) => builder.bind(json),
         }
     }
 }

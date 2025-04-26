@@ -7,6 +7,9 @@ import { Dialog } from "../components/dialog";
 import { Heading } from "../components/heading";
 import { Text } from "../components/text";
 import { Badge } from "../components/badge";
+import { Input } from "../components/input";
+import { Textarea } from "../components/textarea";
+import { Select } from "../components/select";
 
 // Schedule type interface
 interface RecordingSchedule {
@@ -354,7 +357,7 @@ export default function RecordingSchedules() {
       )}
 
       {/* Schedules Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="rounded-lg shadow overflow-hidden">
         <Table className="min-w-full divide-y divide-gray-200">
           <TableHead>
             <TableRow>
@@ -427,7 +430,7 @@ export default function RecordingSchedules() {
           <Heading level={2}>Add Recording Schedule</Heading>
           <button
             onClick={() => setIsAddModalOpen(false)}
-            className="text-gray-500 hover:text-gray-700"
+            className="hover:text-gray-700"
           >
             <XMarkIcon className="h-6 w-6" />
           </button>
@@ -436,8 +439,8 @@ export default function RecordingSchedules() {
         <form onSubmit={handleAddSchedule}>
           <div className="grid grid-cols-1 gap-4 mb-4">
             <div>
-              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">Schedule Name *</label>
-              <input
+              <Text className="block text-sm font-medium mb-1">Schedule Name *</Text>
+              <Input
                 type="text"
                 id="name"
                 name="name"
@@ -449,8 +452,8 @@ export default function RecordingSchedules() {
             </div>
 
             <div>
-              <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-              <textarea
+              <Text className="block text-sm font-medium mb-1">Description</Text>
+              <Textarea
                 id="description"
                 name="description"
                 rows={2}
@@ -461,8 +464,8 @@ export default function RecordingSchedules() {
             </div>
 
             <div>
-              <label htmlFor="camera_id" className="block text-sm font-medium text-gray-700 mb-1">Camera *</label>
-              <select
+              <Text className="block text-sm font-medium mb-1">Camera *</Text>
+              <Select
                 id="camera_id"
                 name="camera_id"
                 required
@@ -480,13 +483,13 @@ export default function RecordingSchedules() {
                     {camera.camera.name || `Camera ${camera.camera.id.substring(0, 8)}`}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
 
             {formData.camera_id && (
               <div>
-                <label htmlFor="stream_id" className="block text-sm font-medium text-gray-700 mb-1">Stream *</label>
-                <select
+                <Text className="block text-sm font-medium mb-1">Stream *</Text>
+                <Select
                   id="stream_id"
                   name="stream_id"
                   required
@@ -502,14 +505,14 @@ export default function RecordingSchedules() {
                         {stream.name || `Stream ${stream.id.substring(0, 8)}`}
                       </option>
                     ))}
-                </select>
+                </Select>
               </div>
             )}
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label htmlFor="start_time" className="block text-sm font-medium text-gray-700 mb-1">Start Time *</label>
-                <input
+                <Text className="block text-sm font-medium mb-1">Start Time *</Text>
+                <Input
                   type="time"
                   id="start_time"
                   name="start_time"
@@ -521,8 +524,8 @@ export default function RecordingSchedules() {
               </div>
 
               <div>
-                <label htmlFor="end_time" className="block text-sm font-medium text-gray-700 mb-1">End Time *</label>
-                <input
+                <Text className="block text-sm font-medium text-gray-700 mb-1">End Time *</Text>
+                <Input
                   type="time"
                   id="end_time"
                   name="end_time"
@@ -535,10 +538,10 @@ export default function RecordingSchedules() {
             </div>
 
             <div>
-              <label htmlFor="retention_days" className="block text-sm font-medium text-gray-700 mb-1">
+              <Text className="block text-sm font-medium text-gray-700 mb-1">
                 Retention Period *
-              </label>
-              <select
+              </Text>
+              <Select
                 id="retention_days"
                 name="retention_days"
                 required
@@ -551,14 +554,14 @@ export default function RecordingSchedules() {
                     {option.label}
                   </option>
                 ))}
-              </select>
+              </Select>
               <p className="mt-1 text-sm text-gray-500">
                 Recordings will be automatically deleted after this period
               </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Days of Week *</label>
+              <Text className="block text-sm font-medium text-gray-700 mb-2">Days of Week *</Text>
               <DayOfWeekSelector />
             </div>
 
@@ -568,9 +571,9 @@ export default function RecordingSchedules() {
                 checked={formData.enabled || false}
                 onChange={() => setFormData({ ...formData, enabled: !formData.enabled })}
               />
-              <label htmlFor="enabled" className="ml-2 block text-sm font-medium text-gray-700">
+              <Text className="ml-2 block text-sm font-medium">
                 Enable schedule immediately
-              </label>
+              </Text>
             </div>
           </div>
 
@@ -598,19 +601,19 @@ export default function RecordingSchedules() {
         <Dialog open={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} size="2xl">
           <div className="flex justify-between items-center mb-4">
             <Heading level={2}>Edit Recording Schedule</Heading>
-            <button
+            <Button
               onClick={() => setIsEditModalOpen(false)}
-              className="text-gray-500 hover:text-gray-700"
+              className="hover:text-gray-700"
             >
               <XMarkIcon className="h-6 w-6" />
-            </button>
+            </Button>
           </div>
 
           <form onSubmit={handleEditSchedule}>
             <div className="grid grid-cols-1 gap-4 mb-4">
               <div>
-                <label htmlFor="edit-name" className="block text-sm font-medium text-gray-700 mb-1">Schedule Name *</label>
-                <input
+                <Text className="block text-sm font-medium mb-1">Schedule Name *</Text>
+                <Input
                   type="text"
                   id="edit-name"
                   name="name"
@@ -622,8 +625,8 @@ export default function RecordingSchedules() {
               </div>
 
               <div>
-                <label htmlFor="edit-description" className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                <textarea
+                <Text className="block text-sm font-medium mb-1">Description</Text>
+                <Textarea
                   id="edit-description"
                   name="description"
                   rows={2}
@@ -635,8 +638,8 @@ export default function RecordingSchedules() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label htmlFor="edit-start_time" className="block text-sm font-medium text-gray-700 mb-1">Start Time *</label>
-                  <input
+                  <Text className="block text-sm font-medium mb-1">Start Time *</Text>
+                  <Input
                     type="time"
                     id="edit-start_time"
                     name="start_time"
@@ -648,8 +651,8 @@ export default function RecordingSchedules() {
                 </div>
 
                 <div>
-                  <label htmlFor="edit-end_time" className="block text-sm font-medium text-gray-700 mb-1">End Time *</label>
-                  <input
+                  <Text className="block text-sm font-medium mb-1">End Time *</Text>
+                  <Input
                     type="time"
                     id="edit-end_time"
                     name="end_time"
@@ -662,10 +665,10 @@ export default function RecordingSchedules() {
               </div>
 
               <div>
-                <label htmlFor="edit-retention_days" className="block text-sm font-medium text-gray-700 mb-1">
+                <Text className="block text-sm font-medium mb-1">
                   Retention Period *
-                </label>
-                <select
+                </Text>
+                <Select
                   id="edit-retention_days"
                   name="retention_days"
                   required
@@ -678,14 +681,14 @@ export default function RecordingSchedules() {
                       {option.label}
                     </option>
                   ))}
-                </select>
+                </Select>
                 <p className="mt-1 text-sm text-gray-500">
                   Recordings will be automatically deleted after this period
                 </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Days of Week *</label>
+                <Text className="block text-sm font-medium mb-2">Days of Week *</Text>
                 <DayOfWeekSelector />
               </div>
 
@@ -695,9 +698,9 @@ export default function RecordingSchedules() {
                   checked={formData.enabled || false}
                   onChange={() => setFormData({ ...formData, enabled: !formData.enabled })}
                 />
-                <label htmlFor="edit-enabled" className="ml-2 block text-sm font-medium text-gray-700">
+                <Text className="ml-2 block text-sm font-medium">
                   {formData.enabled ? 'Schedule is active' : 'Schedule is inactive'}
-                </label>
+                </Text>
               </div>
             </div>
 

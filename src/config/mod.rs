@@ -12,6 +12,7 @@ pub struct Config {
     pub streaming: StreamingConfig,
     pub database: DatabaseConfig,
     pub security: SecurityConfig,
+    pub message_broker: MessageBrokerConfig,
 }
 
 /// API server configuration
@@ -65,6 +66,22 @@ pub struct RecordingConfig {
     pub format: String,
     /// Default retention period in days
     pub retention_days: i32,
+    /// Storage cleanup configuration
+    #[serde(default)]
+    pub cleanup: StorageCleanupConfig,
+}
+
+/// Storage cleanup configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StorageCleanupConfig {
+    /// Whether cleanup is enabled
+    pub enabled: bool,
+    /// Maximum retention period in days
+    pub max_retention_days: i32,
+    /// Maximum disk usage percentage before cleanup
+    pub max_disk_usage_percent: u8,
+    /// Interval in seconds to check for cleanup
+    pub check_interval_secs: u64,
 }
 
 /// Streaming service configuration
@@ -132,6 +149,85 @@ fn default_password_hash_cost() -> u32 {
     10 // reasonable default for bcrypt
 }
 
+/// Message broker (RabbitMQ) configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MessageBrokerConfig {
+    /// RabbitMQ connection URI
+    #[serde(default = "default_rabbitmq_uri")]
+    pub uri: String,
+    /// Connection pool size
+    #[serde(default = "default_rabbitmq_pool_size")]
+    pub pool_size: u32,
+    /// Exchange name for event publishing
+    #[serde(default = "default_rabbitmq_exchange")]
+    pub exchange: String,
+    /// Dead letter exchange name
+    #[serde(default = "default_rabbitmq_dlx")]
+    pub dead_letter_exchange: String,
+    /// Default message timeout in milliseconds
+    #[serde(default = "default_rabbitmq_timeout")]
+    pub timeout_ms: u64,
+    /// Connection retry attempts
+    #[serde(default = "default_rabbitmq_retry_attempts")]
+    pub retry_attempts: u32,
+    /// Connection retry delay in milliseconds
+    #[serde(default = "default_rabbitmq_retry_delay")]
+    pub retry_delay_ms: u64,
+}
+
+fn default_rabbitmq_uri() -> String {
+    "amqp://guest:guest@localhost:5672/%2f".to_string()
+}
+
+fn default_rabbitmq_pool_size() -> u32 {
+    5
+}
+
+fn default_rabbitmq_exchange() -> String {
+    "gstreamer.events".to_string()
+}
+
+fn default_rabbitmq_dlx() -> String {
+    "gstreamer.events.dlx".to_string()
+}
+
+fn default_rabbitmq_timeout() -> u64 {
+    30000 // 30 seconds
+}
+
+fn default_rabbitmq_retry_attempts() -> u32 {
+    3
+}
+
+fn default_rabbitmq_retry_delay() -> u64 {
+    1000 // 1 second
+}
+
+impl Default for StorageCleanupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_retention_days: 30,
+            max_disk_usage_percent: 80,
+            check_interval_secs: 3600,
+        }
+    }
+}
+
+impl Default for MessageBrokerConfig {
+    fn default() -> Self {
+        Self {
+            uri: default_rabbitmq_uri(),
+            pool_size: default_rabbitmq_pool_size(),
+            exchange: default_rabbitmq_exchange(),
+            dead_letter_exchange: default_rabbitmq_dlx(),
+            timeout_ms: default_rabbitmq_timeout(),
+            retry_attempts: default_rabbitmq_retry_attempts(),
+            retry_delay_ms: default_rabbitmq_retry_delay(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -147,11 +243,12 @@ impl Default for Config {
                 db_pool: None,
             },
             recording: RecordingConfig {
-                storage_path: PathBuf::from("./recordings"),
+                storage_path: PathBuf::from(std::fs::canonicalize("./recordings").unwrap()),
                 max_storage_gb: 500,
-                segment_duration: 600,
-                format: "mkv".to_string(), // Use MKV format by default for all recordings
+                segment_duration: 30,      // 5 minutes
+                format: "mp4".to_string(), // Change default to MP4 format
                 retention_days: 30,
+                cleanup: StorageCleanupConfig::default(),
             },
             streaming: StreamingConfig {
                 multicast_address_base: "239.0.0.0".to_string(),
@@ -170,6 +267,7 @@ impl Default for Config {
                 jwt_expiration_minutes: 60,
                 password_hash_cost: 10,
             },
+            message_broker: MessageBrokerConfig::default(),
         }
     }
 }
@@ -194,4 +292,3 @@ pub fn load_config(config_path: Option<&Path>) -> Result<Config> {
         None => Ok(Config::default()),
     }
 }
-

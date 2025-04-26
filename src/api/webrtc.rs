@@ -359,9 +359,9 @@ pub async fn process_webrtc_offer(
                 sample_count += 1;
                 
                 // Debug log every 30 samples (roughly once per second at 30fps)
-                if sample_count % 120 == 0 {
-                    info!("AppSink received {} samples for session {}", sample_count, session_id_for_debug.clone());
-                }
+                // if sample_count % 120 == 0 {
+                //     info!("AppSink received {} samples for session {}", sample_count, session_id_for_debug.clone());
+                // }
                 
                 let sample = match appsink.pull_sample() {
                     Ok(sample) => sample,
@@ -388,9 +388,9 @@ pub async fn process_webrtc_offer(
                 };
                 
                 // Debug log every 30 samples
-                if sample_count % 30 == 0 {
-                    info!("Buffer size: {} bytes for session {}", map.size(), session_id_for_debug.clone());
-                }
+                // if sample_count % 30 == 0 {
+                //     info!("Buffer size: {} bytes for session {}", map.size(), session_id_for_debug.clone());
+                // }
                 
                 // Create WebRTC sample
                 let webrtc_sample = Sample {

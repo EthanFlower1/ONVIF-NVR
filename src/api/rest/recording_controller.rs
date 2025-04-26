@@ -57,6 +57,8 @@ pub struct RecordingStatusItem {
     pub state: String,
     pub fps: i32,
     pub event_type: String,
+    pub segment_id: Option<u32>,
+    pub parent_recording_id: Option<Uuid>,
 }
 
 /// Search query parameters
@@ -67,6 +69,9 @@ pub struct SearchParams {
     pub start_time: Option<String>,
     pub end_time: Option<String>,
     pub event_type: Option<String>,
+    pub segment_id: Option<u32>,
+    pub parent_recording_id: Option<String>,
+    pub is_segment: Option<bool>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -278,7 +283,7 @@ pub async fn stop_recording(
     let stream_uuid = Uuid::parse_str(&stream_id).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     // Get recording status to see what's active
-    let all_status = state.recording_manager.get_recording_status();
+    let all_status = state.recording_manager.get_recording_status().await;
 
     // Find active recordings for this camera and stream
     let matching_recordings: Vec<&RecordingStatus> = all_status
@@ -377,7 +382,7 @@ pub async fn get_recording_status(
     let stream_uuid = Uuid::parse_str(&stream_id).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     // Get all recording status
-    let all_status = state.recording_manager.get_recording_status();
+    let all_status = state.recording_manager.get_recording_status().await;
 
     // Filter by camera and stream
     let filtered_status: Vec<RecordingStatusItem> = all_status
@@ -393,6 +398,8 @@ pub async fn get_recording_status(
             state: status.pipeline_state,
             fps: status.fps,
             event_type: format!("{:?}", status.event_type),
+            segment_id: status.segment_id,
+            parent_recording_id: status.parent_recording_id,
         })
         .collect();
 
@@ -412,7 +419,7 @@ pub async fn get_camera_recording_status(
     let camera_uuid = Uuid::parse_str(&camera_id).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     // Get all recording status
-    let all_status = state.recording_manager.get_recording_status();
+    let all_status = state.recording_manager.get_recording_status().await;
 
     // Filter by camera
     let filtered_status: Vec<RecordingStatusItem> = all_status
@@ -428,6 +435,8 @@ pub async fn get_camera_recording_status(
             state: status.pipeline_state,
             fps: status.fps,
             event_type: format!("{:?}", status.event_type),
+            segment_id: status.segment_id,
+            parent_recording_id: status.parent_recording_id,
         })
         .collect();
 
@@ -443,7 +452,7 @@ pub async fn get_all_recording_status(
     // Convert AppState to RecordingApiState
     let state = app_state_to_recording_state(&state);
     // Get all recording status
-    let all_status = state.recording_manager.get_recording_status();
+    let all_status = state.recording_manager.get_recording_status().await;
 
     // Convert to response format
     let status_items: Vec<RecordingStatusItem> = all_status
@@ -458,6 +467,8 @@ pub async fn get_all_recording_status(
             state: status.pipeline_state,
             fps: status.fps,
             event_type: format!("{:?}", status.event_type),
+            segment_id: status.segment_id,
+            parent_recording_id: status.parent_recording_id,
         })
         .collect();
 
@@ -482,6 +493,9 @@ pub async fn search_recordings(
         event_types: None,
         schedule_id: None,
         min_duration: None,
+        segment_id: params.segment_id,
+        parent_recording_id: None,
+        is_segment: params.is_segment,
         limit: params.limit,
         offset: params.offset,
     };
@@ -497,6 +511,13 @@ pub async fn search_recordings(
     if let Some(stream_id_str) = params.stream_id {
         if let Ok(stream_id) = Uuid::parse_str(&stream_id_str) {
             query.stream_ids = Some(vec![stream_id]);
+        }
+    }
+
+    // Parse parent recording ID if provided
+    if let Some(parent_id_str) = params.parent_recording_id {
+        if let Ok(parent_id) = Uuid::parse_str(&parent_id_str) {
+            query.parent_recording_id = Some(parent_id);
         }
     }
 
