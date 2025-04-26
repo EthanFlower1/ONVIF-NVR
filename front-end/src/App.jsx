@@ -1,20 +1,15 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './layout.tsx'
+import { AuthLayout } from './components/auth-layout.tsx'
 import Login from './pages/login.tsx'
+import ForgotPassword from './pages/forgot-password.tsx'
+import Register from './pages/register.tsx'
 import Cameras from './pages/cameras.tsx'
 import DeviceDiscovery from './pages/discovery.tsx'
 import Liveview from './pages/live-view.tsx'
 import Recordings from './pages/recordings.tsx'
 import RecordingSchedules from './pages/recording-schedules.tsx'
 import './App.css'
-
-// Placeholder Home component
-const Home = () => (
-  <div className="text-center">
-    <h1 className="text-2xl font-bold mb-4">Welcome to G-Streamer</h1>
-    <p>This is the home page of our application.</p>
-  </div>
-)
 
 // Placeholder Settings component
 const Settings = () => (
@@ -35,13 +30,11 @@ const Events = () => (
 function App() {
   return (
     <Routes>
-      {/* Auth routes */}
-      <Route path="/login" element={
-        <Login />
-      } />
-
       {/* Main application routes with Layout */}
       <Route path="/" element={<Layout><Liveview /></Layout>} />
+      <Route path="/login" element={<AuthLayout><Login /></AuthLayout>} />
+      <Route path="/register" element={<AuthLayout><Register /></AuthLayout>} />
+      <Route path="/forgot-password" element={<AuthLayout><ForgotPassword /></AuthLayout>} />
       <Route path="/settings" element={<Layout><Settings /></Layout>} />
       <Route path="/events" element={<Layout><Events /></Layout>} />
       <Route path="/cameras" element={<Layout><Cameras /></Layout>} />
