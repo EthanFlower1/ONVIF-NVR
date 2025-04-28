@@ -297,6 +297,220 @@ impl RecordingManager {
         };
 
         // Setup segment location signal handler (for database tracking)
+splitmuxsink.connect("format-location-full", false, move |args| {
+    // This is called when a new segment file is about to be created
+    if args.len() < 3 {
+        warn!(
+            "format-location-full signal has fewer than expected arguments: {}",
+            args.len()
+        );
+        let fallback_name = format!(
+            "{}/segment_emergency.{}",
+            dir_path_clone.to_str().unwrap(),
+            format_clone
+        );
+        return Some(fallback_name.to_value());
+    }
+
+    // Log argument details for debugging
+    info!("format-location-full signal: got {} args", args.len());
+    for (i, arg) in args.iter().enumerate() {
+        info!("  Arg {}: type = {}", i, arg.type_().name());
+    }
+
+    // Get the fragment ID (index)
+    let fragment_id = match args[1].get::<u32>() {
+        Ok(id) => id,
+        Err(e) => {
+            warn!("Failed to get fragment ID: {}", e);
+            0 // Default to 0 if we can't get the ID
+        }
+    };
+    let now = Utc::now();
+    let timestamp = now.format("%Y%m%d_%H%M%S").to_string();
+
+    // Extract the GstSample containing the first buffer that will go into this file
+    let first_sample = match args[2].get::<gst::Sample>() {
+        Ok(sample) => sample,
+        Err(e) => {
+            warn!("Failed to get first sample: {}", e);
+            // Continue with less information
+            let segment_filename = format!(
+                "{}/{}.{}",
+                dir_path_clone.to_str().unwrap(),
+                timestamp,
+                format_clone
+            );
+            info!("Generated segment filename (without sample data): {}", segment_filename);
+            return Some(segment_filename.to_value());
+        }
+    };
+
+    // Get buffer from sample
+    let buffer = match first_sample.buffer() {
+        Some(buf) => buf,
+        None => {
+            warn!("No buffer in first sample");
+            let segment_filename = format!(
+                "{}/{}.{}",
+                dir_path_clone.to_str().unwrap(),
+                timestamp,
+                format_clone
+            );
+            return Some(segment_filename.to_value());
+        }
+    };
+
+    // Extract timing information from the buffer
+    let pts = buffer.pts();
+    let dts = buffer.dts();
+    let duration = buffer.duration();
+    
+    // Get caps information (format, resolution, etc.)
+// Get caps information (format, resolution, etc.)
+// Get caps information (format, resolution, etc.)
+let caps = match first_sample.caps() {
+    Some(c) => c,
+    None => {
+        warn!("No caps in first sample");
+        // Create a basic empty caps
+        &gst::Caps::new_empty()
+    }
+};
+
+    // Extract video-specific information from caps
+    let caps_str = caps.to_string();
+    let mut width = 0;
+    let mut height = 0;
+    let mut framerate_num = 0;
+    let mut framerate_den = 1;
+    let mut mime_type = "unknown";
+    
+    if let Some(structure) = caps.structure(0) {
+        mime_type = structure.name();
+        width = structure.get::<i32>("width").unwrap_or(0);
+        height = structure.get::<i32>("height").unwrap_or(0);
+        
+if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
+        framerate_num = fraction.numer();
+        framerate_den = fraction.denom();
+    }
+    }
+
+    info!("Fragment ID: {}, PTS: {:?}, Width: {}, Height: {}", 
+          fragment_id, pts, width, height);
+
+    // Create a filename using our own format
+    let segment_filename = format!(
+        "{}/{}.{}",
+        dir_path_clone.to_str().unwrap(),
+        timestamp,
+        format_clone
+    );
+
+    info!("Generated segment filename: {}", segment_filename);
+
+    // Create a unique ID for this segment
+    let segment_id = Uuid::new_v4();
+
+    // Calculate precise segment start time using PTS if available
+    let segment_start = if let Some(pts_time) = pts {
+        // Convert PTS to milliseconds and add to the base start time
+        let pts_ms = pts_time.mseconds();
+        start_time_clone + chrono::Duration::milliseconds(pts_ms as i64)
+    } else {
+        // Fall back to our estimate based on fragment ID
+        start_time_clone + chrono::Duration::seconds((fragment_id as i64) * segment_duration_clone)
+    };
+
+    // Calculate actual frame rate from caps if available
+    let fps = if framerate_num > 0 && framerate_den > 0 {
+        (framerate_num as f64 / framerate_den as f64) as u32
+    } else {
+        stream_clone.framerate.unwrap_or(30) as u32
+    };
+
+    // Create segment metadata with detailed information from sample
+    let segment_metadata = serde_json::json!({
+        "status": "processing",
+        "finalized": false,
+        "segment_type": "time_based",
+        "creation_time": chrono::Utc::now().to_rfc3339(),
+        "video_info": {
+            "mime_type": mime_type,
+            "width": width,
+            "height": height,
+            "framerate_num": framerate_num,
+            "framerate_den": framerate_den,
+            "has_pts": pts.is_some(),
+            "has_dts": dts.is_some(),
+            "buffer_duration_ns": duration.map(|d| d.nseconds()).unwrap_or(0),
+            "caps_string": caps_str,
+        }
+    });
+
+    // Create a segment recording entry with more accurate information
+    let resolution = if width > 0 && height > 0 {
+        format!("{}x{}", width, height)
+    } else {
+        stream_clone.resolution.clone().unwrap_or_else(|| "unknown".to_string())
+    };
+
+    let segment_recording = Recording {
+        id: segment_id,
+        camera_id: stream_clone.camera_id,
+        stream_id: stream_clone.id,
+        start_time: segment_start,
+        end_time: None,
+        file_path: std::path::PathBuf::from(&segment_filename),
+        file_size: 0,
+        duration: 0,
+        format: format_clone.clone(),
+        resolution,
+        fps,
+        event_type: event_type_clone,
+        metadata: Some(segment_metadata),
+        schedule_id: schedule_id_clone,
+        segment_id: Some(fragment_id), // Store the segment ID directly
+        parent_recording_id: Some(recording_id_clone), // Store parent recording ID directly
+    };
+
+    // We can't use tokio::spawn directly in the GStreamer thread as it's not inside the Tokio runtime
+    // Instead, we'll use a std::thread to bridge between GStreamer and Tokio
+    let recording_clone = segment_recording.clone();
+    let recordings_repo = recordings_repo_clone.clone();
+    let segment_id_clone = segment_id;
+    let fragment_id_clone = fragment_id;
+
+    // Create the initial database entry immediately
+    std::thread::spawn(move || {
+        // Create a simple runtime for this operation
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create Tokio runtime");
+
+        // Run the async operation to create the recording entry
+        rt.block_on(async {
+            match recordings_repo.create(&recording_clone).await {
+                Ok(_) => {
+                    info!(
+                        "Created database entry for segment {}: {}",
+                        fragment_id_clone, segment_id_clone
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to create database entry for segment {}: {}",
+                        fragment_id_clone, e
+                    );
+                }
+            }
+        });
+    });
+
+    Some(segment_filename.to_value())
+});
         // [Code for signal handler remains the same]
 
         //-----------------------------------------------------------------------------
