@@ -1525,6 +1525,7 @@ dependencies = [
  "glob",
  "gstreamer",
  "gstreamer-app",
+ "gstreamer-audio",
  "gstreamer-pbutils",
  "gstreamer-video",
  "jsonwebtoken",
