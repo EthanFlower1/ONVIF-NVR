@@ -127,7 +127,7 @@ pub async fn process_webrtc_offer(
 
     // Get the existing stream using stream_id from StreamManager
     let stream_id = request.stream_id.to_string();
-    let (pipeline, tee) = state.stream_manager.get_stream_access(&stream_id)
+    let (pipeline, tee, _) = state.stream_manager.get_stream_access(&stream_id)
         .map_err(|e| {
             error!("Failed to get stream access: {}", e);
             axum::http::StatusCode::INTERNAL_SERVER_ERROR
@@ -571,7 +571,7 @@ async fn clean_up_gstreamer_elements(session_id: &str, state: &Arc<WebRTCState>)
     let stream_list = state.stream_manager.list_streams();
 
     for (stream_id, _) in stream_list {
-        if let Ok((pipeline, tee)) = state.stream_manager.get_stream_access(&stream_id) {
+        if let Ok((pipeline, tee, _)) = state.stream_manager.get_stream_access(&stream_id) {
             info!(
                 "Cleaning up GStreamer elements for session {} in stream {}",
                 session_id, stream_id
