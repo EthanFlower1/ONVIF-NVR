@@ -318,7 +318,6 @@ impl RecordingManager {
 
                 let parse = gst::ElementFactory::make("h264parse")
                     .name(format!("record_parse_{}", element_suffix))
-                    .property("config-interval", -1)
                     .build()?;
 
                 (depay, parse)
@@ -562,6 +561,20 @@ impl RecordingManager {
             return Err(anyhow!("Failed to link video elements: {}", e));
         }
         info!("Successfully linked video elements");
+        // let tee_src_pad = video_tee.request_pad_simple("src_%u").unwrap();
+        // tee_src_pad.link(&video_queue);
+
+        let tee_src_pad = video_tee
+            .request_pad_simple("src_%u")
+            .ok_or_else(|| anyhow!("Failed to get tee src pad"))?;
+
+        let queue_sink_pad = video_queue
+            .static_pad("sink")
+            .ok_or_else(|| anyhow!("Failed to get queue sink pad"))?;
+
+        // Link the tee to the queue
+        tee_src_pad.link(&queue_sink_pad)?;
+
 
         // 2. Link audio processing chain if available
         if let Some((
@@ -634,9 +647,6 @@ impl RecordingManager {
         }
 
         // 5. Connect the video tee to the video queue
-        info!("Connecting video tee to video queue");
-        let tee_src_pad = video_tee.request_pad_simple("src_%u").unwrap();
-        tee_src_pad.link(&video_queue);
 
         // if let Some(tee_src_pad) = video_tee.request_pad_simple("src_%u") {
         //     if let Some(queue_sink_pad) = video_queue.static_pad("sink") {
@@ -692,11 +702,6 @@ impl RecordingManager {
         // PIPELINE STATE MANAGEMENT
         //-----------------------------------------------------------------------------
         // Platform-specific preroll timing
-        #[cfg(target_os = "macos")]
-        {
-            info!("macOS detected: extra wait time for preroll");
-            std::thread::sleep(std::time::Duration::from_secs(2));
-        }
 
         // Set pipeline to Playing state
         info!(

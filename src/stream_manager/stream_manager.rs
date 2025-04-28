@@ -131,7 +131,7 @@ impl StreamManager {
                             "video" => format!("video_tee_{}", sid_clone),
                             "audio" => format!("audio_tee_{}", sid_clone),
                             _ => {
-                                eprintln!("Unsupported media type: {}", media_type);
+                                warn!("Unsupported media type: {}", media_type);
                                 return;
                             }
                         };
