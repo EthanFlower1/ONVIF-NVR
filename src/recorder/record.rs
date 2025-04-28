@@ -236,8 +236,176 @@ impl RecordingManager {
                 anyhow!("Failed to get video stream access: {}", e)
             })?;
 
+        let _state_change_result = pipeline.set_state(gst::State::Playing);
+
+        // Wait for pipeline to fully transition to Playing state
+        sleep(Duration::from_secs(1)).await;
+
         // Generate unique key for this recording
         let element_suffix = recording_id.to_string().replace("-", "");
+
+
+    //-----------------------------------------------------------------------------
+    // DETERMINE ACTUAL VIDEO CODEC FROM CAPS
+    //-----------------------------------------------------------------------------
+    // Create a temporary queue to get caps from tee
+    let temp_queue = gst::ElementFactory::make("queue")
+        .name(format!("temp_queue_{}", element_suffix))
+        .build()?;
+
+    // Add to pipeline and link to tee
+    pipeline.add(&temp_queue)?;
+    let tee_temp_pad = video_tee.request_pad_simple("src_%u")
+        .ok_or_else(|| anyhow!("Failed to get temporary tee src pad"))?;
+    let temp_sink_pad = temp_queue.static_pad("sink")
+        .ok_or_else(|| anyhow!("Failed to get temporary queue sink pad"))?;
+    tee_temp_pad.link(&temp_sink_pad)?;
+    temp_queue.sync_state_with_parent()?;
+
+    // Give the queue a moment to receive data
+    sleep(Duration::from_millis(500)).await;
+
+    // Get caps from the src pad
+    let temp_src_pad = temp_queue.static_pad("src")
+        .ok_or_else(|| anyhow!("Failed to get temporary queue src pad"))?;
+    
+    let video_caps = temp_src_pad.current_caps();
+    
+    // Determine actual video codec from caps
+    let video_codec = if let Some(caps) = video_caps {
+        if let Some(structure) = caps.structure(0) {
+            let mime_type = structure.name();
+            
+            info!("Detected video caps: {}", structure.to_string());
+            
+            if mime_type.contains("x-rtp") {
+                // Extract encoding-name from RTP caps
+                if let Ok(encoding_name) = structure.get::<String>("encoding-name") {
+                    info!("Detected video encoding from RTP caps: {}", encoding_name);
+                    encoding_name.to_lowercase()
+                } else {
+                    info!("Could not determine encoding from RTP caps, using reported codec");
+                    video_codec.to_lowercase()
+                }
+            } else {
+                // For non-RTP caps, determine from media type
+                if mime_type.contains("h264") {
+                    "h264".to_string()
+                } else if mime_type.contains("h265") || mime_type.contains("hevc") {
+                    "h265".to_string()
+                } else if mime_type.contains("jpeg") || mime_type.contains("mjpeg") {
+                    "jpeg".to_string()
+                } else if mime_type.contains("vp8") {
+                    "vp8".to_string()
+                } else if mime_type.contains("vp9") {
+                    "vp9".to_string()
+                } else {
+                    info!("Using reported video codec as fallback: {}", video_codec);
+                    video_codec.to_lowercase()
+                }
+            }
+        } else {
+            info!("No structure in video caps, using reported codec");
+            video_codec.to_lowercase()
+        }
+    } else {
+        info!("No video caps available, using reported codec");
+        video_codec.to_lowercase()
+    };
+
+    // Clean up temporary elements
+    tee_temp_pad.unlink(&temp_sink_pad)?;
+    temp_queue.set_state(gst::State::Null)?;
+    pipeline.remove(&temp_queue)?;
+    video_tee.release_request_pad(&tee_temp_pad);
+
+    //-----------------------------------------------------------------------------
+    // DETERMINE ACTUAL AUDIO CODEC FROM CAPS (if audio is available)
+    //-----------------------------------------------------------------------------
+    let audio_codec = if !audio_codec.is_empty() {
+        // Create a temporary queue to get caps from audio tee
+        let temp_audio_queue = gst::ElementFactory::make("queue")
+            .name(format!("temp_audio_queue_{}", element_suffix))
+            .build()?;
+
+        // Add to pipeline and link to tee
+        pipeline.add(&temp_audio_queue)?;
+        if let Some(audio_tee_pad) = audio_tee.request_pad_simple("src_%u") {
+            if let Some(temp_audio_sink_pad) = temp_audio_queue.static_pad("sink") {
+                if audio_tee_pad.link(&temp_audio_sink_pad).is_ok() {
+                    temp_audio_queue.sync_state_with_parent()?;
+
+                    // Give the queue a moment to receive data
+                    sleep(Duration::from_millis(500)).await;
+
+                    // Get caps from the src pad
+                    if let Some(temp_audio_src_pad) = temp_audio_queue.static_pad("src") {
+                        if let Some(audio_caps) = temp_audio_src_pad.current_caps() {
+                            if let Some(structure) = audio_caps.structure(0) {
+                                let mime_type = structure.name();
+                                
+                                info!("Detected audio caps: {}", structure.to_string());
+                                
+                                let detected_audio_codec = if mime_type.contains("x-rtp") {
+                                    // Extract encoding-name from RTP caps
+                                    if let Ok(encoding_name) = structure.get::<String>("encoding-name") {
+                                        info!("Detected audio encoding from RTP caps: {}", encoding_name);
+                                        encoding_name.to_lowercase()
+                                    } else {
+                                        info!("Could not determine encoding from audio RTP caps, using reported codec");
+                                        audio_codec.to_lowercase()
+                                    }
+                                } else {
+                                    // For non-RTP caps, determine from media type
+                                    if mime_type.contains("pcmu") {
+                                        "pcmu".to_string()
+                                    } else if mime_type.contains("pcma") {
+                                        "pcma".to_string()
+                                    } else if mime_type.contains("aac") {
+                                        "aac".to_string()
+                                    } else if mime_type.contains("mp4a") {
+                                        "mp4a-latm".to_string()
+                                    } else {
+                                        info!("Using reported audio codec as fallback: {}", audio_codec);
+                                        audio_codec.to_lowercase()
+                                    }
+                                };
+
+                                // Clean up audio temp elements
+                                audio_tee_pad.unlink(&temp_audio_sink_pad)?;
+                                temp_audio_queue.set_state(gst::State::Null)?;
+                                pipeline.remove(&temp_audio_queue)?;
+                                audio_tee.release_request_pad(&audio_tee_pad);
+                                
+                                detected_audio_codec
+                            } else {
+                                info!("No structure in audio caps, using reported codec");
+                                audio_codec.to_lowercase()
+                            }
+                        } else {
+                            info!("No audio caps available, using reported codec");
+                            audio_codec.to_lowercase()
+                        }
+                    } else {
+                        info!("Could not get audio src pad, using reported codec");
+                        audio_codec.to_lowercase()
+                    }
+                } else {
+                    info!("Could not link audio tee to temp queue, using reported codec");
+                    audio_codec.to_lowercase()
+                }
+            } else {
+                info!("Could not get audio sink pad, using reported codec");
+                audio_codec.to_lowercase()
+            }
+        } else {
+            info!("Could not get audio tee pad, using reported codec");
+            audio_codec.to_lowercase()
+        }
+    } else {
+        info!("No audio tee available, using empty string for audio codec");
+        "".to_string()
+    };
 
         //-----------------------------------------------------------------------------
         // MUXER & SPLITMUXSINK SETUP - Using the same format for all codecs
