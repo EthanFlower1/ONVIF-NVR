@@ -279,7 +279,7 @@ impl RecordingManager {
                 info!("macOS detected: using longer segment duration for stability");
                 builder = builder.property(
                     "max-size-time",
-                    gst::ClockTime::from_seconds((self.segment_duration * 3 / 2) as u64),
+                    gst::ClockTime::from_seconds(self.segment_duration as u64),
                 );
                 builder = builder.property("send-keyframe-requests", true);
                 builder = builder.property("async-finalize", true);
@@ -416,7 +416,7 @@ impl RecordingManager {
                         .name(format!("record_audio_depay_{}", element_suffix))
                         .build()?
                 }
-                "G711" => {
+                "g711" => {
                     info!("Using rtppcmudepay for PCMA codec");
                     gst::ElementFactory::make("rtppcmudepay")
                         .name(format!("record_audio_depay_{}", element_suffix))
@@ -450,8 +450,8 @@ impl RecordingManager {
                         .name(format!("record_audio_decoder_{}", element_suffix))
                         .build()?
                 }
-                "G711" => {
-                    info!("Using mulawdec for G711 codec");
+                "g711" => {
+                    info!("Using g711 for G711 codec");
                     gst::ElementFactory::make("mulawdec")
                         .name(format!("record_audio_decoder_{}", element_suffix))
                         .build()?
@@ -556,30 +556,16 @@ impl RecordingManager {
             video_depay.name(),
             video_parse.name()
         );
-        if let Err(e) = gst::Element::link_many(&[&video_queue, &video_depay, &video_parse, &splitmuxsink]) {
+        if let Err(e) = gst::Element::link_many(&[&video_queue, &video_depay, &video_parse]) {
             error!("Failed to link video elements: {}", e);
             return Err(anyhow!("Failed to link video elements: {}", e));
         }
         info!("Successfully linked video elements");
-        // let tee_src_pad = video_tee.request_pad_simple("src_%u").unwrap();
-        // tee_src_pad.link(&video_queue);
-
-        let tee_src_pad = video_tee
-            .request_pad_simple("src_%u")
-            .ok_or_else(|| anyhow!("Failed to get tee src pad"))?;
-
-        let queue_sink_pad = video_queue
-            .static_pad("sink")
-            .ok_or_else(|| anyhow!("Failed to get queue sink pad"))?;
-
-        // Link the tee to the queue
-        tee_src_pad.link(&queue_sink_pad)?;
-
 
         // 2. Link audio processing chain if available
         if let Some((
             _audio_tee,
-            _audio_queue,
+            audio_queue,
             audio_depay,
             audio_decoder,
             audio_convert,
@@ -592,6 +578,7 @@ impl RecordingManager {
 
             // Link audio processing elements in sequence
             if let Err(e) = gst::Element::link_many(&[
+                audio_queue,
                 audio_depay,
                 audio_decoder,
                 audio_convert,
@@ -606,26 +593,19 @@ impl RecordingManager {
             }
         }
 
+
         // 3. Link video to splitmuxsink
-        // info!("Linking video parse to splitmuxsink");
-        // if let Err(e) = video_parse.link_pads(Some("src"), &splitmuxsink, Some("video")) {
-        //     error!("Failed to link video parse to splitmuxsink: {}", e);
-        //
-        //     // Try requesting a video pad directly
-        //     info!("Trying with request_pad on splitmuxsink");
-        //     if let Some(sink_pad) = splitmuxsink.request_pad_simple("video") {
-        //         let src_pad = video_parse.static_pad("src").unwrap();
-        //         if let Err(e) = src_pad.link(&sink_pad) {
-        //             error!("Failed to link video with requested pad: {}", e);
-        //             return Err(anyhow!("Failed to link video pipeline: {}", e));
-        //         }
-        //         info!("Successfully linked video using requested pad");
-        //     } else {
-        //         return Err(anyhow!("Failed to link video pipeline: {}", e));
-        //     }
-        // } else {
-        //     info!("Successfully linked video parse to splitmuxsink");
-        // }
+        info!("Linking video parse to splitmuxsink");
+            if let Some(sink_pad) = splitmuxsink.request_pad_simple("video") {
+                let src_pad = video_parse.static_pad("src").unwrap();
+                if let Err(e) = src_pad.link(&sink_pad) {
+                    error!("Failed to link video with requested pad: {}", e);
+                    return Err(anyhow!("Failed to link video pipeline: {}", e));
+                }
+                info!("Successfully linked video using requested pad");
+            } else {
+                return Err(anyhow!("Failed to link video pipeline to splitmuxsink"));
+            }
 
         // 4. Link audio to splitmuxsink if available
         if let Some((_, _, _, _, _, _, _, audio_parse)) = &audio_elements {
@@ -646,7 +626,19 @@ impl RecordingManager {
             }
         }
 
+
         // 5. Connect the video tee to the video queue
+        let tee_src_pad = video_tee
+            .request_pad_simple("src_%u")
+            .ok_or_else(|| anyhow!("Failed to get tee src pad"))?;
+
+        let queue_sink_pad = video_queue
+            .static_pad("sink")
+            .ok_or_else(|| anyhow!("Failed to get queue sink pad"))?;
+
+        // Link the tee to the queue
+        tee_src_pad.link(&queue_sink_pad)?;
+
 
         // if let Some(tee_src_pad) = video_tee.request_pad_simple("src_%u") {
         //     if let Some(queue_sink_pad) = video_queue.static_pad("sink") {
