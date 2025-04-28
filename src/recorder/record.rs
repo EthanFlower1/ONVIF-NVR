@@ -297,6 +297,18 @@ impl RecordingManager {
         };
 
         // Setup segment location signal handler (for database tracking)
+        let recording_id_clone = recording_id;
+        let stream_clone = stream.clone();
+        let format_clone = self.format.clone();
+        let event_type_clone = event_type;
+        let schedule_id_clone = schedule_id;
+        let recordings_repo_clone = self.recordings_repo.clone();
+        let start_time_clone = now;
+        let segment_duration_clone = self.segment_duration;
+
+        // Instead of using format-location-full, use the regular format-location signal
+        // which is more widely supported and compatible
+        let dir_path_clone = dir_path.clone();
 splitmuxsink.connect("format-location-full", false, move |args| {
     // This is called when a new segment file is about to be created
     if args.len() < 3 {
