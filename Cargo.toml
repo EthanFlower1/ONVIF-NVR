@@ -31,12 +31,12 @@ deadpool = "0.10.0"  # Connection pool abstractions
 bcrypt = "0.17.0"
 toml = "0.8.20"
 glob = "0.3.1"
-onvif = { git = "https://github.com/EthanFlower1/onvif-rs.git" }
-schema = { package = "schema", git = "https://github.com/EthanFlower1/onvif-rs.git" }
-metadatastream = { package = "metadatastream", git = "https://github.com/EthanFlower1/onvif-rs.git" }
-devicemgmt = { package = "devicemgmt", git = "https://github.com/EthanFlower1/onvif-rs.git" }
-media = { package = "media", git = "https://github.com/EthanFlower1/onvif-rs.git" }
-transport = { package = "transport", git = "https://github.com/EthanFlower1/onvif-rs.git" }
+onvif = { git = "https://github.com/lumeohq/onvif-rs" }
+schema = { package = "schema", git = "https://github.com/lumeohq/onvif-rs" }
+metadatastream = { package = "metadatastream", git = "https://github.com/lumeohq/onvif-rs" }
+devicemgmt = { package = "devicemgmt", git = "https://github.com/lumeohq/onvif-rs" }
+media = { package = "media", git = "https://github.com/lumeohq/onvif-rs" }
+transport = { package = "transport", git = "https://github.com/lumeohq/onvif-rs" }
 futures = "0.3"
 futures-util = "0.3"
 axum = { version = "0.6", features = ["ws"] }
