@@ -25,6 +25,7 @@ struct Stream {
     pipeline: gst::Pipeline,
     tee: gst::Element,
     audio_tee: gst::Element,
+    metadata_tee: gst::Element,
 }
 
 /// StreamManager: Core class that manages video streams and their branches
@@ -97,7 +98,6 @@ impl StreamManager {
         Ok(count)
     }
 
-    /// Add a new stream from the given source, with separate audio/video tees
     pub fn add_stream(&self, source: StreamSource, stream_id: String) -> Result<StreamId> {
         // 1) Init GStreamer
         gst::init()?;
@@ -107,29 +107,35 @@ impl StreamManager {
         let rtspsrc = gst::ElementFactory::make("rtspsrc")
             .property("location", &source.uri)
             .property("latency", &200u32)
+            .property("onvif-mode", &true)
             .build()?;
         pipeline.add(&rtspsrc)?;
-        // 4) Create two tees and add them
+        // 4) Create three tees and add them
         let video_tee = gst::ElementFactory::make("tee")
             .name(&format!("video_tee_{}", stream_id))
             .build()?;
         let audio_tee = gst::ElementFactory::make("tee")
             .name(&format!("audio_tee_{}", stream_id))
             .build()?;
-        pipeline.add_many(&[&video_tee, &audio_tee])?;
+        let metadata_tee = gst::ElementFactory::make("tee")
+            .name(&format!("metadata_tee_{}", stream_id))
+            .build()?;
+        pipeline.add_many(&[&video_tee, &audio_tee, &metadata_tee])?;
         // 5) Route incoming pads into the right tee
         //
         // We clone what we need into the closure:
+        // // this is a memory leak -> need to use downgrade and upgrade flow
         let pipeline_clone = pipeline.clone();
         let sid_clone = stream_id.clone();
         rtspsrc.connect_pad_added(move |_, src_pad| {
-            // inspect caps to decide audio vs video
+            // inspect caps to decide audio vs video vs metadata
             if let Some(caps) = src_pad.current_caps() {
                 if let Some(s) = caps.structure(0) {
                     if let Ok(media_type) = s.get::<String>("media") {
                         let tee_name = match media_type.as_str() {
                             "video" => format!("video_tee_{}", sid_clone),
                             "audio" => format!("audio_tee_{}", sid_clone),
+                            "application" | "meta" => format!("metadata_tee_{}", sid_clone),
                             _ => {
                                 warn!("Unsupported media type: {}", media_type);
                                 return;
@@ -196,7 +202,11 @@ impl StreamManager {
             }
         });
         // 6) Prevent tees from blocking when no real branches exist
-        for (tee, tag) in [(&video_tee, "video"), (&audio_tee, "audio")] {
+        for (tee, tag) in [
+            (&video_tee, "video"),
+            (&audio_tee, "audio"),
+            (&metadata_tee, "metadata"),
+        ] {
             let dummy_q = gst::ElementFactory::make("queue")
                 .name(&format!("{}_dummy_q_{}", stream_id, tag))
                 .build()?;
@@ -209,12 +219,13 @@ impl StreamManager {
             tee.link(&dummy_q)?;
             dummy_q.link(&dummy_sink)?;
         }
-        // 7) Wrap into your Stream struct (you'll need to add audio_tee to it)
+        // 7) Wrap into your Stream struct (you'll need to add metadata_tee to it)
         let stream = Stream {
             source,
             pipeline: pipeline.clone(),
             tee: video_tee.clone(),
             audio_tee: audio_tee.clone(),
+            metadata_tee: metadata_tee.clone(),
         };
         // 8) Store and set READY
         {
@@ -232,7 +243,7 @@ impl StreamManager {
     pub fn get_stream_access(
         &self,
         stream_id: &str,
-    ) -> Result<(gst::Pipeline, gst::Element, gst::Element)> {
+    ) -> Result<(gst::Pipeline, gst::Element, gst::Element, gst::Element)> {
         let streams = self.streams.read().unwrap();
         let stream = streams
             .get(stream_id)
@@ -244,6 +255,7 @@ impl StreamManager {
             stream.pipeline.clone(),
             stream.tee.clone(),
             stream.audio_tee.clone(),
+            stream.metadata_tee.clone(),
         ))
     }
 

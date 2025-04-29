@@ -11,7 +11,10 @@ use chrono::{DateTime, Utc};
 use gstreamer as gst;
 use gstreamer::glib;
 use gstreamer::prelude::*;
-use log::{error, info, warn};
+use gstreamer_app::{AppSink, AppSinkCallbacks};
+use log::{debug, error, info, warn};
+use metadatastream::metadata_stream::MetadataStreamChoice;
+use schema::b_2::TopicExpressionType;
 use serde_json::json;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -20,7 +23,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
-
+use metadatastream::{
+    metadata_stream, ClassDescriptor, EventStream, EventStreamChoice, MetadataStream, Ptzstream, PtzstreamChoice, VideoAnalyticsStream, VideoAnalyticsStreamChoice
+};
+use yaserde::de::from_str;
 /// Manages the recording of streams from cameras
 pub struct RecordingManager {
     stream_manager: Arc<StreamManager>,
@@ -189,6 +195,10 @@ impl RecordingManager {
         let recording_id = Uuid::new_v4();
         let now = Utc::now();
 
+match self.log_metadata_stream(&stream.id.to_string()) {
+    Ok(_) => println!("Successfully started logging metadata for stream {}", stream.id),
+    Err(e) => eprintln!("Failed to log metadata: {}", e),
+}
         // Create directory structure with date-based hierarchy
         let date_path = now.format("%Y/%m/%d/%H").to_string();
         let camera_path = format!("{}", stream.name);
@@ -228,7 +238,7 @@ impl RecordingManager {
         info!("Using recording file path: {:?}", file_path);
 
         // Get access to the MAIN PIPELINE and VIDEO TEE
-        let (pipeline, video_tee, audio_tee) = self
+        let (pipeline, video_tee, audio_tee, _) = self
             .stream_manager
             .get_stream_access(&stream.id.to_string())
             .map_err(|e| {
@@ -661,8 +671,6 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
     let recordings_repo = recordings_repo_clone.clone();
     let segment_id_clone = segment_id;
     let fragment_id_clone = fragment_id;
-
-    // Create the initial database entry immediately
     std::thread::spawn(move || {
         // Create a simple runtime for this operation
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -1730,7 +1738,6 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             .values()
             .any(|r| &r.stream_id == stream_id)
     }
-
     /// Get status of all active recordings
     pub async fn get_recording_status(&self) -> Vec<RecordingStatus> {
         let active_recordings = self.active_recordings.lock().await;
@@ -1808,5 +1815,440 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                 }
             })
     }
+
+pub fn log_metadata_stream(&self, stream_id: &str) -> Result<()> {
+    // Get access to the pipeline and tees
+    let (pipeline, _video_tee, _audio_tee, metadata_tee) = self
+            .stream_manager
+            .get_stream_access(stream_id)
+            .map_err(|e| {
+                error!("Failed to get video stream access: {}", e);
+                anyhow!("Failed to get video stream access: {}", e)
+            })?;
+
+    // Create elements for the metadata branch
+    let queue = gst::ElementFactory::make("queue")
+        .name(&format!("metadata_logger_queue_{}", stream_id))
+        .build()?;
+
+    let depay = gst::ElementFactory::make("rtponvifmetadatadepay")
+        .name(&format!("metadata_logger_depay_{}", stream_id))
+        .build()?;
+    
+    // Create a sink that will handle the metadata
+    let sink = gst::ElementFactory::make("appsink")
+        .name(&format!("metadata_sink_{}", stream_id))
+        .property("emit-signals", &true)
+        .property("sync", &false)
+        .build()?;
+    
+    // Add all elements to the pipeline
+    pipeline.add_many(&[&queue, &depay, &sink])?;
+    
+    // Link the elements together
+    gst::Element::link_many(&[&queue, &depay, &sink])?;
+    
+    // Request a pad from the tee and link it to our queue
+    let tee_src_pad = metadata_tee.request_pad_simple("src_%u").ok_or_else(|| {
+        anyhow!("Failed to get source pad from metadata tee")
+    })?;
+    
+    let queue_sink_pad = queue.static_pad("sink").ok_or_else(|| {
+        anyhow!("Failed to get sink pad from queue")
+    })?;
+    
+    tee_src_pad.link(&queue_sink_pad)?;
+    
+    // Get the appsink element and connect to new-sample signal
+    let appsink = sink.dynamic_cast::<AppSink>().unwrap();
+    
+    // Import the necessary types for metadata processing
+    let stream_manager = self.stream_manager.clone();
+    let stream_id_clone = stream_id.to_string();
+    
+    appsink.set_callbacks(
+        AppSinkCallbacks::builder()
+            .new_sample(move |appsink| {
+                // Pull the sample from the sink
+                let sample = match appsink.pull_sample() {
+                    Ok(sample) => sample,
+                    Err(e) => {
+                        error!("Error pulling sample: {}", e);
+                        return Err(gst::FlowError::Eos);
+                    },
+                };
+                
+                // Extract the buffer from the sample
+                let buffer = match sample.buffer() {
+                    Some(buffer) => buffer,
+                    None => {
+                        error!("Received sample with no buffer");
+                        return Ok(gst::FlowSuccess::Ok);
+                    }
+                };
+                
+                // Map the buffer to read its contents
+                let map = match buffer.map_readable() {
+                    Ok(map) => map,
+                    Err(_) => {
+                        error!("Failed to map buffer");
+                        return Ok(gst::FlowSuccess::Ok);
+                    }
+                };
+                
+                // Convert the buffer data to a string if it's XML
+                match std::str::from_utf8(&map) {
+                    Ok(metadata_str) => {
+                        info!("Received metadata: {}", metadata_str);
+
+
+
+let metadata: MetadataStream = yaserde::de::from_str(metadata_str).unwrap();
+
+    println!("Response: {:#?}", metadata);
+                        
+                        // Parse the metadata using yaserde
+                        match yaserde::de::from_str::<MetadataStream>(metadata_str) {
+                            Ok(metadata_stream) => {
+                                    info!("METADATA STREAM {:?}", metadata_stream);
+                                // Process based on metadata type
+                                match &metadata_stream.metadata_stream_choice {
+                                    metadata_stream::MetadataStreamChoice::VideoAnalytics(analytics) => {
+                                        process_video_analytics(&analytics, &stream_id_clone);
+                                    },
+                                    metadata_stream::MetadataStreamChoice::Event(event_stream) => {
+                                        process_event_stream(&event_stream, &stream_id_clone);
+                                    },
+                                    metadata_stream::MetadataStreamChoice::Ptz(ptz_stream) => {
+                                        process_ptz_stream(&ptz_stream, &stream_id_clone);
+                                    },
+                                    metadata_stream::MetadataStreamChoice::Extension(extension) => {
+                                         info!("Extension metadata type: {:?}", extension);
+                                    },
+                                    metadata_stream::MetadataStreamChoice::__Unknown__(unknown) => {
+                                         info!("Unknown metadata type: {:?}", unknown);
+                                        }
+                                }
+                            },
+                            Err(e) => {
+                                error!("Failed to parse metadata: {}", e);
+                            }
+                        }
+                    },
+                    Err(_) => {
+                        // If it's not UTF-8 (could be binary format like KLV)
+                        debug!("Received binary metadata of size: {} bytes", map.len());
+                    }
+                }
+                
+                Ok(gst::FlowSuccess::Ok)
+            })
+            .build()
+    );
+    
+    // Make sure these elements start in the right state
+    queue.sync_state_with_parent()?;
+    depay.sync_state_with_parent()?;
+    appsink.sync_state_with_parent()?;
+
+    info!("Metadata logging started for stream {}", stream_id);
+    
+    // Return success
+    Ok(())
+}
 }
 
+// Helper function to process video analytics metadata
+fn process_video_analytics(analytics: &VideoAnalyticsStream, stream_id: &str) {
+    match &analytics.video_analytics_stream_choice {
+        VideoAnalyticsStreamChoice::Frame(frame) => {
+            info!(
+                "Processing video analytics frame for stream {} at time {}", 
+                stream_id, 
+                frame.utc_time
+            );
+            
+            // Process detected objects
+            for obj in &frame.object {
+                // Convert Integer to i32 for object_id
+                let object_id = match &obj.object_id {
+                    Some(id) => i32::try_from(&id.0).unwrap_or(0),
+                    None => 0,
+                };
+                
+                // Check if the object has appearance data
+                if let Some(appearance) = &obj.appearance {
+                    // Process shape information if available
+                    if let Some(shape) = &appearance.shape {
+                        let bbox = &shape.bounding_box;
+                        let center = &shape.center_of_gravity;
+                        
+                        info!(
+                            "Object ID {:?} at position ({:?}, {:?}), bounding box: top={:?}, left={:?}, right={:?}, bottom={:?}", 
+                            object_id, 
+                            center.x, 
+                            center.y, 
+                            bbox.top, 
+                            bbox.left, 
+                            bbox.right, 
+                            bbox.bottom
+                        );
+                    }
+                    
+                    // Process classification information
+                    if let Some(class) = &appearance.class {
+                        process_object_classification(class, object_id);
+                    }
+                    
+                    // Process vehicle information if available
+                    if let Some(vehicle_info) = &appearance.vehicle_info {
+                        info!(
+                            "Vehicle detected (Object ID {}): Type={:?}, Brand={:?}, Model={:?}",
+                            object_id,
+                            vehicle_info._type.likelihood,
+                            vehicle_info.brand.likelihood,
+                            vehicle_info.model.likelihood
+                        );
+                    }
+                    
+                    // Process license plate information if available
+                    if let Some(plate_info) = &appearance.license_plate_info {
+                        info!(
+                            "License plate detected (Object ID {}): Number={:?}, Type={:?}, Country={:?}",
+                            object_id,
+                            plate_info.plate_number.likelihood,
+                            plate_info.plate_type.likelihood,
+                            plate_info.country_code.likelihood
+                        );
+                    }
+                    
+                    // Process license plate information if available
+                    if let Some(plate_info) = &appearance.license_plate_info {
+                        info!(
+                            "License plate detected (Object ID {}): Number={:?}, Type={:?}, Country={:?}",
+                            object_id,
+                            plate_info.plate_number,
+                            plate_info.plate_type,
+                            plate_info.country_code
+                        );
+                    }
+                }
+                
+                // Process behavior information if available
+                if let Some(behaviour) = &obj.behaviour {
+                    if behaviour.removed.is_some() {
+                        info!("Object ID {} was removed from scene", object_id);
+                    }
+                    
+                    if behaviour.idle.is_some() {
+                        info!("Object ID {} is idle", object_id);
+                    }
+                    
+                    if let Some(speed) = behaviour.speed {
+                        info!("Object ID {} is moving at speed {}", object_id, speed);
+                    }
+                }
+            }
+            
+            // Process object tree if available (object tracking relations)
+            if let Some(object_tree) = &frame.object_tree {
+                for rename in &object_tree.rename {
+                    let from_id = match &rename.from.object_id {
+                        Some(id) => i32::try_from(&id.0).unwrap_or(0),
+                        None => 0,
+                    };
+                    
+                    let to_id = match &rename.to.object_id {
+                        Some(id) => i32::try_from(&id.0).unwrap_or(0),
+                        None => 0,
+                    };
+                    
+                    info!("Object renamed: from ID {} to ID {}", from_id, to_id);
+                }
+                
+                for split in &object_tree.split {
+                    let from_id = match &split.from.object_id {
+                        Some(id) => i32::try_from(&id.0).unwrap_or(0),
+                        None => 0,
+                    };
+                    
+                    let to_ids: Vec<i32> = split.to.iter()
+                        .map(|obj_id| match &obj_id.object_id {
+                            Some(id) => i32::try_from(&id.0).unwrap_or(0),
+                            None => 0,
+                        })
+                        .collect();
+                    
+                    info!("Object split: from ID {} to IDs {:?}", from_id, to_ids);
+                }
+                
+                for merge in &object_tree.merge {
+                    let from_ids: Vec<i32> = merge.from.iter()
+                        .map(|obj_id| match &obj_id.object_id {
+                            Some(id) => i32::try_from(&id.0).unwrap_or(0),
+                            None => 0,
+                        })
+                        .collect();
+                    
+                    let to_id = match &merge.to.object_id {
+                        Some(id) => i32::try_from(&id.0).unwrap_or(0),
+                        None => 0,
+                    };
+                    
+                    info!("Objects merged: from IDs {:?} to ID {}", from_ids, to_id);
+                }
+                
+                for delete in &object_tree.delete {
+                    let id = match &delete.object_id {
+                        Some(id) => i32::try_from(&id.0).unwrap_or(0),
+                        None => 0,
+                    };
+                    
+                    info!("Object deleted: ID {}", id);
+                }
+            }
+            
+            // Process motion in cells if available
+            if let Some(extension) = &frame.extension {
+                if let Some(motion_in_cells) = &extension.motion_in_cells {
+                    info!(
+                        "Motion in cells detected: {}x{} grid, data: {}", 
+                        motion_in_cells.columns, 
+                        motion_in_cells.rows, 
+                        motion_in_cells.cells
+                    );
+                }
+            }
+        },
+        VideoAnalyticsStreamChoice::Extension(_) => {
+            info!("Video analytics extension data received");
+        },
+        _ => {
+            debug!("Unknown video analytics data received");
+        }
+    }
+}
+
+// Helper function to process object classification data
+fn process_object_classification(class: &ClassDescriptor, object_id: i32) {
+    // First check the modern Type field (recommended by ONVIF)
+    if !class._type.is_empty() {
+        for type_likelihood in &class._type {
+            info!(
+                "Object ID {} classified with likelihood {:?}", 
+                object_id,
+                type_likelihood.likelihood
+            );
+        }
+    }
+    // Otherwise check the legacy ClassCandidate field
+    else if !class.class_candidate.is_empty() {
+        for candidate in &class.class_candidate {
+            info!(
+                "Object ID {} classified as {:?} with likelihood {}", 
+                object_id,
+                candidate._type,
+                candidate.likelihood
+            );
+        }
+    }
+    
+    // Check extension data with other types if present
+    if let Some(extension) = &class.extension {
+        for other_type in &extension.other_types {
+            info!(
+                "Object ID {} classified as {} with likelihood {}", 
+                object_id,
+                other_type._type,
+                other_type.likelihood
+            );
+        }
+    }
+}
+
+// Helper function to process event stream metadata
+fn process_event_stream(event_stream: &EventStream, stream_id: &str) {
+    match &event_stream.event_stream_choice {
+        EventStreamChoice::NotificationMessage(notification) => {
+            // Access the topic which is potentially a TopicExpressionType
+            let topic_str = notification.topic.inner_text.clone();
+            info!("Event notification for stream {}: Topic={}", stream_id, topic_str);
+            
+            // Handle specific event types based on the topic
+            if topic_str.contains("CellMotionDetector/Motion") {
+                info!("Motion detection event for stream {}", stream_id);
+                // Process motion detection message data here
+            }
+            else if topic_str.contains("AudioAnalytics") {
+                info!("Audio analytics event for stream {}", stream_id);
+                // Process audio analytics message data here
+            }
+            else if topic_str.contains("RuleEngine/TamperDetector") {
+                info!("Tamper detection event for stream {}", stream_id);
+                // Process tamper detection message data here
+            }
+            else if topic_str.contains("VideoSource/ImageTooBlurry") {
+                info!("Image too blurry event for stream {}", stream_id);
+                // Process image quality message data here
+            }
+            else {
+                info!("Other event type: {}", topic_str);
+            }
+        },
+        EventStreamChoice::Extension(_) => {
+            debug!("Event stream extension data received");
+        },
+        _ => {
+            debug!("Unknown event stream data received");
+        }
+    }
+}
+
+// Helper function to process PTZ stream metadata
+fn process_ptz_stream(ptz_stream: &Ptzstream, stream_id: &str) {
+    match &ptz_stream.ptz_stream_choice {
+        PtzstreamChoice::Ptzstatus(ptz_status) => {
+            info!("PTZ status update for stream {}", stream_id);
+            
+            // Process position information if available
+            if let Some(position) = &ptz_status.position {
+                info!(
+                    "PTZ position: Pan={}, Tilt={}, Zoom={}", 
+                    position.pan_tilt.as_ref().map_or("N/A".to_string(), |pt| format!("x={}, y={}", pt.x, pt.y)),
+                    position.pan_tilt.as_ref().map_or("N/A".to_string(), |pt| format!("x={}, y={}", pt.x, pt.y)),
+                    position.zoom.as_ref().map_or("N/A".to_string(), |z| format!("x={}", z.x))
+                );
+            }
+            
+            // Process move status if available
+            if let Some(move_status) = &ptz_status.move_status {
+                let pan_tilt_status = match &move_status.pan_tilt {
+                    Some(pts) => format!("{:?}", pts),
+                    None => "N/A".to_string(),
+                };
+                
+                let zoom_status = match &move_status.zoom {
+                    Some(zs) => format!("{:?}", zs),
+                    None => "N/A".to_string(),
+                };
+                
+                info!(
+                    "PTZ move status: PanTilt={}, Zoom={}", 
+                    pan_tilt_status,
+                    zoom_status
+                );
+            }
+            
+            // Process error information if available
+            if let Some(error) = &ptz_status.error {
+                error!("PTZ error: {}", error);
+            }
+        },
+        PtzstreamChoice::Extension(_) => {
+            debug!("PTZ stream extension data received");
+        },
+        _ => {
+            debug!("Unknown PTZ stream data received");
+        }
+    }
+}

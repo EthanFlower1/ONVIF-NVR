@@ -45,7 +45,7 @@ async fn run_app() -> Result<()> {
 
     // Create database connection pool
     let db_pool = PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(200)
         .connect(&config.database.url)
         .await?;
 
