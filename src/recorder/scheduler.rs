@@ -34,7 +34,7 @@ impl RecordingScheduler {
 
     /// Start the recording scheduler service
     pub async fn start(self: Arc<Self>) -> Result<()> {
-        info!("Starting recording scheduler service");
+        // info!("Starting recording scheduler service");
 
         // Create task to periodically check schedules
         tokio::spawn(async move {
@@ -54,11 +54,11 @@ impl RecordingScheduler {
 
     /// Process recording schedules
     async fn process_schedules(&self) -> Result<()> {
-        info!("Processing recording schedules");
+        // info!("Processing recording schedules");
 
         // Get all currently active schedules
         let active_schedules = self.schedules_repo.get_active_schedules().await?;
-        info!("Found {} active schedules", active_schedules.len());
+        // info!("Found {} active schedules", active_schedules.len());
 
         // Track streams that should be recording now
         let mut should_be_recording = HashMap::new();
@@ -84,7 +84,8 @@ impl RecordingScheduler {
             // Check if already recording this schedule
             if self
                 .recording_manager
-                .is_recording_active(&schedule.id, &stream.id).await
+                .is_recording_active(&schedule.id, &stream.id)
+                .await
             {
                 // Already recording, mark as should be recording
                 should_be_recording.insert(format!("{}-{}", schedule.id, stream.id), true);
@@ -129,7 +130,8 @@ impl RecordingScheduler {
             // Check if currently recording
             if self
                 .recording_manager
-                .is_recording_active(&schedule.id, &schedule.stream_id).await
+                .is_recording_active(&schedule.id, &schedule.stream_id)
+                .await
             {
                 // Stop recording
                 match self
@@ -163,4 +165,3 @@ impl RecordingScheduler {
         Ok(())
     }
 }
-

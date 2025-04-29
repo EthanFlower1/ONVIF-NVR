@@ -5,7 +5,7 @@ use db::migrations;
 use db::repositories::recordings::RecordingsRepository;
 use gst::prelude::*;
 use gstreamer as gst;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use recorder::{RecordingManager, RecordingScheduler, StorageCleanupService};
 use sqlx::postgres::PgPoolOptions;
 use std::{sync::Arc, thread};
@@ -34,13 +34,12 @@ async fn run_app() -> Result<()> {
 
     // Initialize GStreamer
     gst::init()?;
-    info!("GStreamer initialized successfully");
+    debug!("GStreamer initialized successfully");
 
     // Store it for access by other threads
     // Run the main loop - this will block until quit() is called
     let config = config::load_config(None)?;
-
-    info!("Configuration loaded");
+    debug!("Configuration loaded");
     // Load configuration
     // let config = config::setup_config()?;
     // info!("Configuration loaded");

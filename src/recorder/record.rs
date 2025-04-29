@@ -14,8 +14,6 @@ use gstreamer::glib;
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
 use log::{debug, error, info, warn};
-use metadatastream::metadata_stream::MetadataStreamChoice;
-use schema::b_2::TopicExpressionType;
 use serde_json::json;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -24,11 +22,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
-use metadatastream::{
-    metadata_stream, ClassDescriptor, EventStream, EventStreamChoice, MetadataStream, Ptzstream, PtzstreamChoice, VideoAnalyticsStream, VideoAnalyticsStreamChoice
-};
-use yaserde::de::from_str;
-/// Manages the recording of streams from cameras
+
 pub struct RecordingManager {
     stream_manager: Arc<StreamManager>,
     recordings_repo: RecordingsRepository,
@@ -65,7 +59,6 @@ pub struct RecordingStatus {
     pub file_size: u64,
     pub pipeline_state: String,
     pub fps: i32,
-    pub error_count: i32,
     pub event_type: RecordingEventType,
     pub segment_id: Option<u32>,
     pub parent_recording_id: Option<Uuid>,
@@ -188,10 +181,10 @@ impl RecordingManager {
         let video_codec = stream.codec.clone().unwrap_or_default();
         let audio_codec = stream.audio_codec.clone().unwrap_or_default();
 
-        info!(
-            "Starting recording with video codec: {}, audio codec: {}",
-            video_codec, audio_codec
-        );
+        // info!(
+        //     "Starting recording with video codec: {}, audio codec: {}",
+        //     video_codec, audio_codec
+        // );
 
         let recording_id = Uuid::new_v4();
         let now = Utc::now();
@@ -206,16 +199,16 @@ match self.log_metadata_stream(&stream.id.to_string()) {
         let mut dir_path = self.recording_base_path.join(&camera_path).join(&date_path);
 
         // Create parent directories with better error handling
-        info!("Creating recording directory structure: {:?}", dir_path);
+        // info!("Creating recording directory structure: {:?}", dir_path);
         match std::fs::create_dir_all(&dir_path) {
             Ok(_) => {
-                info!("Successfully created directory: {:?}", dir_path);
+                // info!("Successfully created directory: {:?}", dir_path);
 
                 #[cfg(target_os = "macos")]
                 {
                     // Ensure we have the absolute path on macOS to avoid path resolution issues
                     if let Ok(abs_path) = std::fs::canonicalize(&dir_path) {
-                        info!("MacOS: Using absolute path: {:?}", abs_path);
+                        // info!("MacOS: Using absolute path: {:?}", abs_path);
                         // Replace dir_path with absolute path
                         dir_path = abs_path;
                     }
@@ -287,15 +280,15 @@ match self.log_metadata_stream(&stream.id.to_string()) {
         if let Some(structure) = caps.structure(0) {
             let mime_type = structure.name();
             
-            info!("Detected video caps: {}", structure.to_string());
+            // info!("Detected video caps: {}", structure.to_string());
             
             if mime_type.contains("x-rtp") {
                 // Extract encoding-name from RTP caps
                 if let Ok(encoding_name) = structure.get::<String>("encoding-name") {
-                    info!("Detected video encoding from RTP caps: {}", encoding_name);
+                    // info!("Detected video encoding from RTP caps: {}", encoding_name);
                     encoding_name.to_lowercase()
                 } else {
-                    info!("Could not determine encoding from RTP caps, using reported codec");
+                    // info!("Could not determine encoding from RTP caps, using reported codec");
                     video_codec.to_lowercase()
                 }
             } else {
@@ -311,16 +304,16 @@ match self.log_metadata_stream(&stream.id.to_string()) {
                 } else if mime_type.contains("vp9") {
                     "vp9".to_string()
                 } else {
-                    info!("Using reported video codec as fallback: {}", video_codec);
+                    // info!("Using reported video codec as fallback: {}", video_codec);
                     video_codec.to_lowercase()
                 }
             }
         } else {
-            info!("No structure in video caps, using reported codec");
+            // info!("No structure in video caps, using reported codec");
             video_codec.to_lowercase()
         }
     } else {
-        info!("No video caps available, using reported codec");
+        // info!("No video caps available, using reported codec");
         video_codec.to_lowercase()
     };
 
@@ -355,15 +348,15 @@ match self.log_metadata_stream(&stream.id.to_string()) {
                             if let Some(structure) = audio_caps.structure(0) {
                                 let mime_type = structure.name();
                                 
-                                info!("Detected audio caps: {}", structure.to_string());
+                                // info!("Detected audio caps: {}", structure.to_string());
                                 
                                 let detected_audio_codec = if mime_type.contains("x-rtp") {
                                     // Extract encoding-name from RTP caps
                                     if let Ok(encoding_name) = structure.get::<String>("encoding-name") {
-                                        info!("Detected audio encoding from RTP caps: {}", encoding_name);
+                                        // info!("Detected audio encoding from RTP caps: {}", encoding_name);
                                         encoding_name.to_lowercase()
                                     } else {
-                                        info!("Could not determine encoding from audio RTP caps, using reported codec");
+                                        // info!("Could not determine encoding from audio RTP caps, using reported codec");
                                         audio_codec.to_lowercase()
                                     }
                                 } else {
@@ -377,7 +370,7 @@ match self.log_metadata_stream(&stream.id.to_string()) {
                                     } else if mime_type.contains("mp4a") {
                                         "mp4a-latm".to_string()
                                     } else {
-                                        info!("Using reported audio codec as fallback: {}", audio_codec);
+                                        // info!("Using reported audio codec as fallback: {}", audio_codec);
                                         audio_codec.to_lowercase()
                                     }
                                 };
@@ -390,31 +383,31 @@ match self.log_metadata_stream(&stream.id.to_string()) {
                                 
                                 detected_audio_codec
                             } else {
-                                info!("No structure in audio caps, using reported codec");
+                                // info!("No structure in audio caps, using reported codec");
                                 audio_codec.to_lowercase()
                             }
                         } else {
-                            info!("No audio caps available, using reported codec");
+                            // info!("No audio caps available, using reported codec");
                             audio_codec.to_lowercase()
                         }
                     } else {
-                        info!("Could not get audio src pad, using reported codec");
+                        // info!("Could not get audio src pad, using reported codec");
                         audio_codec.to_lowercase()
                     }
                 } else {
-                    info!("Could not link audio tee to temp queue, using reported codec");
+                    // info!("Could not link audio tee to temp queue, using reported codec");
                     audio_codec.to_lowercase()
                 }
             } else {
-                info!("Could not get audio sink pad, using reported codec");
+                // info!("Could not get audio sink pad, using reported codec");
                 audio_codec.to_lowercase()
             }
         } else {
-            info!("Could not get audio tee pad, using reported codec");
+            // info!("Could not get audio tee pad, using reported codec");
             audio_codec.to_lowercase()
         }
     } else {
-        info!("No audio tee available, using empty string for audio codec");
+        // info!("No audio tee available, using empty string for audio codec");
         "".to_string()
     };
 
@@ -455,7 +448,7 @@ match self.log_metadata_stream(&stream.id.to_string()) {
 
             #[cfg(target_os = "macos")]
             {
-                info!("macOS detected: using longer segment duration for stability");
+                // info!("macOS detected: using longer segment duration for stability");
                 builder = builder.property(
                     "max-size-time",
                     gst::ClockTime::from_seconds(self.segment_duration as u64),
@@ -504,10 +497,10 @@ splitmuxsink.connect("format-location-full", false, move |args| {
     }
 
     // Log argument details for debugging
-    info!("format-location-full signal: got {} args", args.len());
-    for (i, arg) in args.iter().enumerate() {
-        info!("  Arg {}: type = {}", i, arg.type_().name());
-    }
+    // info!("format-location-full signal: got {} args", args.len());
+    // for (i, arg) in args.iter().enumerate() {
+    //     info!("  Arg {}: type = {}", i, arg.type_().name());
+    // }
 
     // Get the fragment ID (index)
     let fragment_id = match args[1].get::<u32>() {
@@ -532,7 +525,7 @@ splitmuxsink.connect("format-location-full", false, move |args| {
                 timestamp,
                 format_clone
             );
-            info!("Generated segment filename (without sample data): {}", segment_filename);
+            // info!("Generated segment filename (without sample data): {}", segment_filename);
             return Some(segment_filename.to_value());
         }
     };
@@ -588,8 +581,8 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
     }
     }
 
-    info!("Fragment ID: {}, PTS: {:?}, Width: {}, Height: {}", 
-          fragment_id, pts, width, height);
+    // info!("Fragment ID: {}, PTS: {:?}, Width: {}, Height: {}", 
+    //       fragment_id, pts, width, height);
 
     // Create a filename using our own format
     let segment_filename = format!(
@@ -599,7 +592,7 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
         format_clone
     );
 
-    info!("Generated segment filename: {}", segment_filename);
+    // info!("Generated segment filename: {}", segment_filename);
 
     // Create a unique ID for this segment
     let segment_id = Uuid::new_v4();
@@ -670,7 +663,6 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
     // Instead, we'll use a std::thread to bridge between GStreamer and Tokio
     let recording_clone = segment_recording.clone();
     let recordings_repo = recordings_repo_clone.clone();
-    let segment_id_clone = segment_id;
     let fragment_id_clone = fragment_id;
     std::thread::spawn(move || {
         // Create a simple runtime for this operation
@@ -683,10 +675,10 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
         rt.block_on(async {
             match recordings_repo.create(&recording_clone).await {
                 Ok(_) => {
-                    info!(
-                        "Created database entry for segment {}: {}",
-                        fragment_id_clone, segment_id_clone
-                    );
+                    // info!(
+                    //     "Created database entry for segment {}: {}",
+                    //     fragment_id_clone, segment_id_clone
+                    // );
                 }
                 Err(e) => {
                     error!(
@@ -792,10 +784,6 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
         // AUDIO PROCESSING CHAIN SETUP
         //-----------------------------------------------------------------------------
         let audio_elements = if !audio_codec.is_empty() {
-            info!("Setting up audio processing for codec: {}", audio_codec);
-
-            info!("Successfully retrieved audio_tee from stream manager");
-
             // Create audio elements based on codec
             let audio_queue = gst::ElementFactory::make("queue")
                 .name(format!("record_audio_queue_{}", element_suffix))
@@ -804,35 +792,33 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                 .property("max-size-bytes", 0u32)
                 .build()?;
 
-            // Create appropriate depayloader for the codec
-            info!("AUDIO CODEC ++++++++++++>>>>>>>>>>>>>> {}", audio_codec);
             let audio_depay = match audio_codec.to_lowercase().as_str() {
                 "pcmu" => {
-                    info!("Using rtppcmudepay for PCMU codec");
+                    // info!("Using rtppcmudepay for PCMU codec");
                     gst::ElementFactory::make("rtppcmudepay")
                         .name(format!("record_audio_depay_{}", element_suffix))
                         .build()?
                 }
                 "pcma" => {
-                    info!("Using rtppcmadepay for PCMA codec");
+                    // info!("Using rtppcmadepay for PCMA codec");
                     gst::ElementFactory::make("rtppcmadepay")
                         .name(format!("record_audio_depay_{}", element_suffix))
                         .build()?
                 }
                 "g711" => {
-                    info!("Using rtppcmudepay for PCMA codec");
+                    // info!("Using rtppcmudepay for PCMA codec");
                     gst::ElementFactory::make("rtppcmudepay")
                         .name(format!("record_audio_depay_{}", element_suffix))
                         .build()?
                 }
                 "aac" => {
-                    info!("Using rtpaacdepay for AAC codec");
+                    // info!("Using rtpaacdepay for AAC codec");
                     gst::ElementFactory::make("rtpaacdepay")
                         .name(format!("record_audio_depay_{}", element_suffix))
                         .build()?
                 }
                 "mp4a-latm" => {
-                    info!("Using rtpmp4adepay for MP4A-LATM codec");
+                    // info!("Using rtpmp4adepay for MP4A-LATM codec");
                     gst::ElementFactory::make("rtpmp4adepay")
                         .name(format!("record_audio_depay_{}", element_suffix))
                         .build()?
@@ -848,31 +834,31 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             // Create decoder based on the codec
             let audio_decoder = match audio_codec.to_lowercase().as_str() {
                 "pcmu" => {
-                    info!("Using mulawdec for PCMU codec");
+                    // info!("Using mulawdec for PCMU codec");
                     gst::ElementFactory::make("mulawdec")
                         .name(format!("record_audio_decoder_{}", element_suffix))
                         .build()?
                 }
                 "g711" => {
-                    info!("Using g711 for G711 codec");
+                    // info!("Using g711 for G711 codec");
                     gst::ElementFactory::make("mulawdec")
                         .name(format!("record_audio_decoder_{}", element_suffix))
                         .build()?
                 }
                 "pcma" => {
-                    info!("Using alawdec for PCMA codec");
+                    // info!("Using alawdec for PCMA codec");
                     gst::ElementFactory::make("alawdec")
                         .name(format!("record_audio_decoder_{}", element_suffix))
                         .build()?
                 }
                 "aac" | "mp4a-latm" => {
-                    info!("Using avdec_aac for AAC codec");
+                    // info!("Using avdec_aac for AAC codec");
                     gst::ElementFactory::make("avdec_aac")
                         .name(format!("record_audio_decoder_{}", element_suffix))
                         .build()?
                 }
                 _ => {
-                    info!("Using mulawdec as default audio decoder");
+                    // info!("Using mulawdec as default audio decoder");
                     gst::ElementFactory::make("mulawdec")
                         .name(format!("record_audio_decoder_{}", element_suffix))
                         .build()?
@@ -910,7 +896,7 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                 audio_parse,
             ))
         } else {
-            info!("No audio codec detected, skipping audio processing");
+            // info!("No audio codec detected, skipping audio processing");
             None
         };
 
@@ -953,17 +939,17 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
         // LINKING ELEMENTS
         //-----------------------------------------------------------------------------
         // 1. Link video processing chain
-        info!(
-            "Linking video elements: {} -> {} -> {}",
-            video_queue.name(),
-            video_depay.name(),
-            video_parse.name()
-        );
+        // info!(
+        //     "Linking video elements: {} -> {} -> {}",
+        //     video_queue.name(),
+        //     video_depay.name(),
+        //     video_parse.name()
+        // );
         if let Err(e) = gst::Element::link_many(&[&video_queue, &video_depay, &video_parse]) {
             error!("Failed to link video elements: {}", e);
             return Err(anyhow!("Failed to link video elements: {}", e));
         }
-        info!("Successfully linked video elements");
+        // info!("Successfully linked video elements");
 
         // 2. Link audio processing chain if available
         if let Some((
@@ -977,7 +963,7 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             audio_parse,
         )) = &audio_elements
         {
-            info!("Linking audio processing chain");
+            // info!("Linking audio processing chain");
 
             // Link audio processing elements in sequence
             if let Err(e) = gst::Element::link_many(&[
@@ -990,42 +976,42 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                 audio_parse,
             ]) {
                 error!("Failed to link audio processing elements: {}", e);
-                info!("Continuing without audio due to linking failure");
+                // info!("Continuing without audio due to linking failure");
             } else {
-                info!("Successfully linked audio processing elements");
+                // info!("Successfully linked audio processing elements");
             }
         }
 
 
         // 3. Link video to splitmuxsink
-        info!("Linking video parse to splitmuxsink");
+        // info!("Linking video parse to splitmuxsink");
             if let Some(sink_pad) = splitmuxsink.request_pad_simple("video") {
                 let src_pad = video_parse.static_pad("src").unwrap();
                 if let Err(e) = src_pad.link(&sink_pad) {
                     error!("Failed to link video with requested pad: {}", e);
                     return Err(anyhow!("Failed to link video pipeline: {}", e));
                 }
-                info!("Successfully linked video using requested pad");
+                // info!("Successfully linked video using requested pad");
             } else {
                 return Err(anyhow!("Failed to link video pipeline to splitmuxsink"));
             }
 
         // 4. Link audio to splitmuxsink if available
         if let Some((_, _, _, _, _, _, _, audio_parse)) = &audio_elements {
-            info!("Linking audio parse to splitmuxsink");
+            // info!("Linking audio parse to splitmuxsink");
 
             if let Some(sink_pad) = splitmuxsink.request_pad_simple("audio_%u") {
                 if let Some(src_pad) = audio_parse.static_pad("src") {
                     if let Err(e) = src_pad.link(&sink_pad) {
                         error!("Failed to link audio parse to splitmuxsink: {}", e);
-                        info!("Continuing without audio due to sink pad linking failure");
+                        // info!("Continuing without audio due to sink pad linking failure");
                     } else {
-                        info!("Successfully linked audio parse to splitmuxsink");
+                        // info!("Successfully linked audio parse to splitmuxsink");
                     }
                 }
             } else {
                 error!("Failed to get audio sink pad from splitmuxsink");
-                info!("Continuing without audio due to sink pad request failure");
+                // info!("Continuing without audio due to sink pad request failure");
             }
         }
 
@@ -1061,23 +1047,23 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
 
         // 6. Connect the audio tee to the audio queue if available
         if let Some((audio_tee, audio_queue, _, _, _, _, _, _)) = &audio_elements {
-            info!("Connecting audio tee to audio queue");
+            // info!("Connecting audio tee to audio queue");
 
             if let Some(tee_src_pad) = audio_tee.request_pad_simple("src_%u") {
                 if let Some(queue_sink_pad) = audio_queue.static_pad("sink") {
                     if let Err(e) = tee_src_pad.link(&queue_sink_pad) {
                         error!("Failed to link audio tee to queue: {}", e);
-                        info!("Continuing without audio due to tee linking failure");
+                        // info!("Continuing without audio due to tee linking failure");
                     } else {
-                        info!("Successfully linked audio tee to queue");
+                        // info!("Successfully linked audio tee to queue");
                     }
                 } else {
                     error!("Failed to get audio queue sink pad");
-                    info!("Continuing without audio due to pad retrieval failure");
+                    // info!("Continuing without audio due to pad retrieval failure");
                 }
             } else {
                 error!("Failed to request audio tee src pad");
-                info!("Continuing without audio due to tee pad request failure");
+                // info!("Continuing without audio due to tee pad request failure");
             }
         }
 
@@ -1086,7 +1072,7 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
         //-----------------------------------------------------------------------------
         // Sync all elements with the pipeline state
         for element in &elements {
-            info!("Syncing state for element: {}", element.name());
+            // info!("Syncing state for element: {}", element.name());
             if let Err(e) = element.sync_state_with_parent() {
                 error!("Failed to sync state for element {}: {}", element.name(), e);
                 // Continue anyway, the element might not be critical
@@ -1099,10 +1085,10 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
         // Platform-specific preroll timing
 
         // Set pipeline to Playing state
-        info!(
-            "Setting pipeline to Playing state for recording {}",
-            recording_id
-        );
+        // info!(
+        //     "Setting pipeline to Playing state for recording {}",
+        //     recording_id
+        // );
         let _state_change_result = pipeline.set_state(gst::State::Playing);
 
         // Wait for pipeline to fully transition to Playing state
@@ -1110,10 +1096,10 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
 
         // Verify the pipeline state
         let (_, current_state, _) = pipeline.state(gst::ClockTime::from_seconds(1));
-        info!(
-            "Pipeline state after waiting: {:?} for recording {}",
-            current_state, recording_id
-        );
+        // info!(
+        //     "Pipeline state after waiting: {:?} for recording {}",
+        //     current_state, recording_id
+        // );
 
         if current_state != gst::State::Playing {
             warn!(
@@ -1121,10 +1107,10 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                 current_state
             );
             // Try one more time
-            info!(
-                "Retrying to set pipeline to Playing state for recording {}",
-                recording_id
-            );
+            // info!(
+            //     "Retrying to set pipeline to Playing state for recording {}",
+            //     recording_id
+            // );
             let _retry_result = pipeline.set_state(gst::State::Playing);
         }
 
@@ -1214,10 +1200,10 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                                                         fragment_id_clone, e
                                                     );
                                                 } else {
-                                                    info!(
-                                                        "Updated recording for fragment {}, duration={}ms, size={}bytes", 
-                                                        fragment_id_clone, duration_ms_clone, file_size_clone
-                                                    );
+                                                    // info!(
+                                                    //     "Updated recording for fragment {}, duration={}ms, size={}bytes", 
+                                                    //     fragment_id_clone, duration_ms_clone, file_size_clone
+                                                    // );
                                                 }
                                             },
                                             Ok(None) => {
@@ -1242,7 +1228,7 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                     }
                 },
                 gst::MessageView::Eos(_) => {
-                    info!("End of stream received for recording {}", recording_id_clone);
+                    debug!("End of stream received for recording {}", recording_id_clone);
                 },
                 gst::MessageView::Error(err) => {
                     error!(
@@ -1278,12 +1264,12 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             active_recordings.insert(recording_key, active_recording);
         }
 
-        info!(
-            "Started {} recording for camera {} with stream {}",
-            event_type.to_string(),
-            stream.camera_id,
-            stream.id
-        );
+        // info!(
+        //     "Started {} recording for camera {} with stream {}",
+        //     event_type.to_string(),
+        //     stream.camera_id,
+        //     stream.id
+        // );
 
         // Publish recording started event
         // [Code for publishing event remains the same]
@@ -1361,10 +1347,10 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             // Set only the splitmuxsink to NULL state
             let _ = splitmuxsink.set_state(gst::State::Null);
 
-            info!(
-                "Set splitmuxsink to Null state for recording {}",
-                active_recording.recording_id
-            );
+            // info!(
+            //     "Set splitmuxsink to Null state for recording {}",
+            //     active_recording.recording_id
+            // );
         } else {
             warn!(
                 "Could not find splitmuxsink element for recording {}",
@@ -1477,10 +1463,10 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             pipeline.remove(&splitmuxsink).ok();
         }
 
-        info!(
-            "Removed recording elements from pipeline for {}",
-            active_recording.recording_id
-        );
+        // info!(
+        //     "Removed recording elements from pipeline for {}",
+        //     active_recording.recording_id
+        // );
 
         // Get file info
         let metadata = match std::fs::metadata(&active_recording.file_path) {
@@ -1522,7 +1508,7 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             }
         }
 
-        info!("Found {} segment files to finalize", segment_files.len());
+        // info!("Found {} segment files to finalize", segment_files.len());
 
         // Query for all segments associated with this parent recording
         let parent_recording_id = active_recording.recording_id;
@@ -1542,7 +1528,7 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
         {
             Ok(recordings) => {
                 let recordings = recordings.into_iter().map(Recording::from).collect::<Vec<_>>();
-                info!("Found {} segment recordings in database", recordings.len());
+                // info!("Found {} segment recordings in database", recordings.len());
                 recordings
             }
             Err(e) => {
@@ -1599,10 +1585,10 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                 .await
             {
                 Ok(_) => {
-                    info!(
-                        "Finalized segment {} with size {}B",
-                        segment_recording.id, segment_file_size
-                    );
+                    // info!(
+                    //     "Finalized segment {} with size {}B",
+                    //     segment_recording.id, segment_file_size
+                    // );
                 }
                 Err(e) => {
                     error!(
@@ -1644,19 +1630,19 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             .await
         {
             Ok(_) => {
-                info!("Successfully finalized parent recording {} with {} segments, duration {}s and total size {}B",
-                    parent_recording_id, segment_files.len(), duration, total_file_size);
+                // info!("Successfully finalized parent recording {} with {} segments, duration {}s and total size {}B",
+                //     parent_recording_id, segment_files.len(), duration, total_file_size);
 
                 // Additional validation that files exist
                 for (i, path) in segment_files.iter().enumerate().take(5) {
                     if path.exists() {
-                        if let Ok(metadata) = std::fs::metadata(path) {
-                            info!(
-                                "Segment file {} exists: {:?}, size: {} bytes",
-                                i,
-                                path,
-                                metadata.len()
-                            );
+                        if let Ok(_metadata) = std::fs::metadata(path) {
+                            // info!(
+                            //     "Segment file {} exists: {:?}, size: {} bytes",
+                            //     i,
+                            //     path,
+                            //     metadata.len()
+                            // );
                         } else {
                             warn!(
                                 "Segment file {} exists but cannot read metadata: {:?}",
@@ -1669,7 +1655,7 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                 }
 
                 if segment_files.len() > 5 {
-                    info!("... and {} more segment files", segment_files.len() - 5);
+                    // info!("... and {} more segment files", segment_files.len() - 5);
                 }
             }
             Err(e) => {
@@ -1769,7 +1755,6 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                     file_size,
                     pipeline_state: state_str,
                     fps: 0,         // Not available from pipeline
-                    error_count: 0, // Not tracked currently
                     event_type: recording.event_type,
                     segment_id: recording.segment_id,
                     parent_recording_id: recording.parent_recording_id,
@@ -1809,7 +1794,6 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                     file_size,
                     pipeline_state: state_str,
                     fps: 0,
-                    error_count: 0,
                     event_type: recording.event_type,
                     segment_id: recording.segment_id,
                     parent_recording_id: recording.parent_recording_id,
@@ -1864,9 +1848,6 @@ pub fn log_metadata_stream(&self, stream_id: &str) -> Result<()> {
     let appsink = sink.dynamic_cast::<AppSink>().unwrap();
     
     // Import the necessary types for metadata processing
-    let stream_manager = self.stream_manager.clone();
-    let stream_id_clone = stream_id.to_string();
-    
     appsink.set_callbacks(
         AppSinkCallbacks::builder()
             .new_sample(move |appsink| {
@@ -1905,7 +1886,7 @@ pub fn log_metadata_stream(&self, stream_id: &str) -> Result<()> {
 
 
                 let metadata = parse_onvif_event(metadata_str).unwrap();
-                println!("Parsed Event: {:#?}, active: {:#?}", metadata.event_type, metadata.is_active);
+                println!("Parsed Event: {:#?}, active: {:#?}", metadata.event_type, metadata.is_active.unwrap());
                         // Parse the metadata using yaserde
                         // match yaserde::de::from_str::<MetadataStream>(metadata_str) {
                         //     Ok(metadata_stream) => {
@@ -1957,297 +1938,3 @@ pub fn log_metadata_stream(&self, stream_id: &str) -> Result<()> {
 }
 }
 
-// Helper function to process video analytics metadata
-fn process_video_analytics(analytics: &VideoAnalyticsStream, stream_id: &str) {
-    match &analytics.video_analytics_stream_choice {
-        VideoAnalyticsStreamChoice::Frame(frame) => {
-            info!(
-                "Processing video analytics frame for stream {} at time {}", 
-                stream_id, 
-                frame.utc_time
-            );
-            
-            // Process detected objects
-            for obj in &frame.object {
-                // Convert Integer to i32 for object_id
-                let object_id = match &obj.object_id {
-                    Some(id) => i32::try_from(&id.0).unwrap_or(0),
-                    None => 0,
-                };
-                
-                // Check if the object has appearance data
-                if let Some(appearance) = &obj.appearance {
-                    // Process shape information if available
-                    if let Some(shape) = &appearance.shape {
-                        let bbox = &shape.bounding_box;
-                        let center = &shape.center_of_gravity;
-                        
-                        info!(
-                            "Object ID {:?} at position ({:?}, {:?}), bounding box: top={:?}, left={:?}, right={:?}, bottom={:?}", 
-                            object_id, 
-                            center.x, 
-                            center.y, 
-                            bbox.top, 
-                            bbox.left, 
-                            bbox.right, 
-                            bbox.bottom
-                        );
-                    }
-                    
-                    // Process classification information
-                    if let Some(class) = &appearance.class {
-                        process_object_classification(class, object_id);
-                    }
-                    
-                    // Process vehicle information if available
-                    if let Some(vehicle_info) = &appearance.vehicle_info {
-                        info!(
-                            "Vehicle detected (Object ID {}): Type={:?}, Brand={:?}, Model={:?}",
-                            object_id,
-                            vehicle_info._type.likelihood,
-                            vehicle_info.brand.likelihood,
-                            vehicle_info.model.likelihood
-                        );
-                    }
-                    
-                    // Process license plate information if available
-                    if let Some(plate_info) = &appearance.license_plate_info {
-                        info!(
-                            "License plate detected (Object ID {}): Number={:?}, Type={:?}, Country={:?}",
-                            object_id,
-                            plate_info.plate_number.likelihood,
-                            plate_info.plate_type.likelihood,
-                            plate_info.country_code.likelihood
-                        );
-                    }
-                    
-                    // Process license plate information if available
-                    if let Some(plate_info) = &appearance.license_plate_info {
-                        info!(
-                            "License plate detected (Object ID {}): Number={:?}, Type={:?}, Country={:?}",
-                            object_id,
-                            plate_info.plate_number,
-                            plate_info.plate_type,
-                            plate_info.country_code
-                        );
-                    }
-                }
-                
-                // Process behavior information if available
-                if let Some(behaviour) = &obj.behaviour {
-                    if behaviour.removed.is_some() {
-                        info!("Object ID {} was removed from scene", object_id);
-                    }
-                    
-                    if behaviour.idle.is_some() {
-                        info!("Object ID {} is idle", object_id);
-                    }
-                    
-                    if let Some(speed) = behaviour.speed {
-                        info!("Object ID {} is moving at speed {}", object_id, speed);
-                    }
-                }
-            }
-            
-            // Process object tree if available (object tracking relations)
-            if let Some(object_tree) = &frame.object_tree {
-                for rename in &object_tree.rename {
-                    let from_id = match &rename.from.object_id {
-                        Some(id) => i32::try_from(&id.0).unwrap_or(0),
-                        None => 0,
-                    };
-                    
-                    let to_id = match &rename.to.object_id {
-                        Some(id) => i32::try_from(&id.0).unwrap_or(0),
-                        None => 0,
-                    };
-                    
-                    info!("Object renamed: from ID {} to ID {}", from_id, to_id);
-                }
-                
-                for split in &object_tree.split {
-                    let from_id = match &split.from.object_id {
-                        Some(id) => i32::try_from(&id.0).unwrap_or(0),
-                        None => 0,
-                    };
-                    
-                    let to_ids: Vec<i32> = split.to.iter()
-                        .map(|obj_id| match &obj_id.object_id {
-                            Some(id) => i32::try_from(&id.0).unwrap_or(0),
-                            None => 0,
-                        })
-                        .collect();
-                    
-                    info!("Object split: from ID {} to IDs {:?}", from_id, to_ids);
-                }
-                
-                for merge in &object_tree.merge {
-                    let from_ids: Vec<i32> = merge.from.iter()
-                        .map(|obj_id| match &obj_id.object_id {
-                            Some(id) => i32::try_from(&id.0).unwrap_or(0),
-                            None => 0,
-                        })
-                        .collect();
-                    
-                    let to_id = match &merge.to.object_id {
-                        Some(id) => i32::try_from(&id.0).unwrap_or(0),
-                        None => 0,
-                    };
-                    
-                    info!("Objects merged: from IDs {:?} to ID {}", from_ids, to_id);
-                }
-                
-                for delete in &object_tree.delete {
-                    let id = match &delete.object_id {
-                        Some(id) => i32::try_from(&id.0).unwrap_or(0),
-                        None => 0,
-                    };
-                    
-                    info!("Object deleted: ID {}", id);
-                }
-            }
-            
-            // Process motion in cells if available
-            if let Some(extension) = &frame.extension {
-                if let Some(motion_in_cells) = &extension.motion_in_cells {
-                    info!(
-                        "Motion in cells detected: {}x{} grid, data: {}", 
-                        motion_in_cells.columns, 
-                        motion_in_cells.rows, 
-                        motion_in_cells.cells
-                    );
-                }
-            }
-        },
-        VideoAnalyticsStreamChoice::Extension(_) => {
-            info!("Video analytics extension data received");
-        },
-        _ => {
-            debug!("Unknown video analytics data received");
-        }
-    }
-}
-
-// Helper function to process object classification data
-fn process_object_classification(class: &ClassDescriptor, object_id: i32) {
-    // First check the modern Type field (recommended by ONVIF)
-    if !class._type.is_empty() {
-        for type_likelihood in &class._type {
-            info!(
-                "Object ID {} classified with likelihood {:?}", 
-                object_id,
-                type_likelihood.likelihood
-            );
-        }
-    }
-    // Otherwise check the legacy ClassCandidate field
-    else if !class.class_candidate.is_empty() {
-        for candidate in &class.class_candidate {
-            info!(
-                "Object ID {} classified as {:?} with likelihood {}", 
-                object_id,
-                candidate._type,
-                candidate.likelihood
-            );
-        }
-    }
-    
-    // Check extension data with other types if present
-    if let Some(extension) = &class.extension {
-        for other_type in &extension.other_types {
-            info!(
-                "Object ID {} classified as {} with likelihood {}", 
-                object_id,
-                other_type._type,
-                other_type.likelihood
-            );
-        }
-    }
-}
-
-// Helper function to process event stream metadata
-fn process_event_stream(event_stream: &EventStream, stream_id: &str) {
-    match &event_stream.event_stream_choice {
-        EventStreamChoice::NotificationMessage(notification) => {
-            // Access the topic which is potentially a TopicExpressionType
-            let topic_str = notification.topic.inner_text.clone();
-            info!("Event notification for stream {}: Topic={}", stream_id, topic_str);
-            
-            // Handle specific event types based on the topic
-            if topic_str.contains("CellMotionDetector/Motion") {
-                info!("Motion detection event for stream {}", stream_id);
-                // Process motion detection message data here
-            }
-            else if topic_str.contains("AudioAnalytics") {
-                info!("Audio analytics event for stream {}", stream_id);
-                // Process audio analytics message data here
-            }
-            else if topic_str.contains("RuleEngine/TamperDetector") {
-                info!("Tamper detection event for stream {}", stream_id);
-                // Process tamper detection message data here
-            }
-            else if topic_str.contains("VideoSource/ImageTooBlurry") {
-                info!("Image too blurry event for stream {}", stream_id);
-                // Process image quality message data here
-            }
-            else {
-                info!("Other event type: {}", topic_str);
-            }
-        },
-        EventStreamChoice::Extension(_) => {
-            debug!("Event stream extension data received");
-        },
-        _ => {
-            debug!("Unknown event stream data received");
-        }
-    }
-}
-
-// Helper function to process PTZ stream metadata
-fn process_ptz_stream(ptz_stream: &Ptzstream, stream_id: &str) {
-    match &ptz_stream.ptz_stream_choice {
-        PtzstreamChoice::Ptzstatus(ptz_status) => {
-            info!("PTZ status update for stream {}", stream_id);
-            
-            // Process position information if available
-            if let Some(position) = &ptz_status.position {
-                info!(
-                    "PTZ position: Pan={}, Tilt={}, Zoom={}", 
-                    position.pan_tilt.as_ref().map_or("N/A".to_string(), |pt| format!("x={}, y={}", pt.x, pt.y)),
-                    position.pan_tilt.as_ref().map_or("N/A".to_string(), |pt| format!("x={}, y={}", pt.x, pt.y)),
-                    position.zoom.as_ref().map_or("N/A".to_string(), |z| format!("x={}", z.x))
-                );
-            }
-            
-            // Process move status if available
-            if let Some(move_status) = &ptz_status.move_status {
-                let pan_tilt_status = match &move_status.pan_tilt {
-                    Some(pts) => format!("{:?}", pts),
-                    None => "N/A".to_string(),
-                };
-                
-                let zoom_status = match &move_status.zoom {
-                    Some(zs) => format!("{:?}", zs),
-                    None => "N/A".to_string(),
-                };
-                
-                info!(
-                    "PTZ move status: PanTilt={}, Zoom={}", 
-                    pan_tilt_status,
-                    zoom_status
-                );
-            }
-            
-            // Process error information if available
-            if let Some(error) = &ptz_status.error {
-                error!("PTZ error: {}", error);
-            }
-        },
-        PtzstreamChoice::Extension(_) => {
-            debug!("PTZ stream extension data received");
-        },
-        _ => {
-            debug!("Unknown PTZ stream data received");
-        }
-    }
-}
