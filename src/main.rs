@@ -23,6 +23,8 @@ mod messaging;
 mod recorder;
 mod security;
 mod stream_manager;
+mod utils;
+
 pub use error::Error;
 
 async fn run_app() -> Result<()> {

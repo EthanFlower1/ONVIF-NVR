@@ -6,6 +6,7 @@ use crate::db::models::stream_models::Stream;
 use crate::db::repositories::recordings::RecordingsRepository;
 use crate::messaging::broker::MessageBrokerTrait;
 use crate::stream_manager::StreamManager;
+use crate::utils::metadataparser::parse_onvif_event;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use gstreamer as gst;
@@ -1903,37 +1904,35 @@ pub fn log_metadata_stream(&self, stream_id: &str) -> Result<()> {
 
 
 
-let metadata: MetadataStream = yaserde::de::from_str(metadata_str).unwrap();
-
-    println!("Response: {:#?}", metadata);
-                        
+                let metadata = parse_onvif_event(metadata_str).unwrap();
+                println!("Parsed Event: {:#?}, active: {:#?}", metadata.event_type, metadata.is_active);
                         // Parse the metadata using yaserde
-                        match yaserde::de::from_str::<MetadataStream>(metadata_str) {
-                            Ok(metadata_stream) => {
-                                    info!("METADATA STREAM {:?}", metadata_stream);
-                                // Process based on metadata type
-                                match &metadata_stream.metadata_stream_choice {
-                                    metadata_stream::MetadataStreamChoice::VideoAnalytics(analytics) => {
-                                        process_video_analytics(&analytics, &stream_id_clone);
-                                    },
-                                    metadata_stream::MetadataStreamChoice::Event(event_stream) => {
-                                        process_event_stream(&event_stream, &stream_id_clone);
-                                    },
-                                    metadata_stream::MetadataStreamChoice::Ptz(ptz_stream) => {
-                                        process_ptz_stream(&ptz_stream, &stream_id_clone);
-                                    },
-                                    metadata_stream::MetadataStreamChoice::Extension(extension) => {
-                                         info!("Extension metadata type: {:?}", extension);
-                                    },
-                                    metadata_stream::MetadataStreamChoice::__Unknown__(unknown) => {
-                                         info!("Unknown metadata type: {:?}", unknown);
-                                        }
-                                }
-                            },
-                            Err(e) => {
-                                error!("Failed to parse metadata: {}", e);
-                            }
-                        }
+                        // match yaserde::de::from_str::<MetadataStream>(metadata_str) {
+                        //     Ok(metadata_stream) => {
+                        //             info!("METADATA STREAM {:?}", metadata_stream);
+                        //         // Process based on metadata type
+                        //         match &metadata_stream.metadata_stream_choice {
+                        //             metadata_stream::MetadataStreamChoice::VideoAnalytics(analytics) => {
+                        //                 process_video_analytics(&analytics, &stream_id_clone);
+                        //             },
+                        //             metadata_stream::MetadataStreamChoice::Event(event_stream) => {
+                        //                 process_event_stream(&event_stream, &stream_id_clone);
+                        //             },
+                        //             metadata_stream::MetadataStreamChoice::Ptz(ptz_stream) => {
+                        //                 process_ptz_stream(&ptz_stream, &stream_id_clone);
+                        //             },
+                        //             metadata_stream::MetadataStreamChoice::Extension(extension) => {
+                        //                  info!("Extension metadata type: {:?}", extension);
+                        //             },
+                        //             metadata_stream::MetadataStreamChoice::__Unknown__(unknown) => {
+                        //                  info!("Unknown metadata type: {:?}", unknown);
+                        //                 }
+                        //         }
+                        //     },
+                        //     Err(e) => {
+                        //         error!("Failed to parse metadata: {}", e);
+                        //     }
+                        // }
                     },
                     Err(_) => {
                         // If it's not UTF-8 (could be binary format like KLV)
