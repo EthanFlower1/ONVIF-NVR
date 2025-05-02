@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 interface WebRTCStreamPlayerProps {
   streamId: string;
   serverUrl?: string;
@@ -610,14 +610,18 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
       onMouseLeave={() => setShowStats(false)}
     >
       <div className="relative flex-grow bg-black">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted // Mute video to allow autoplay in most browsers
-          className="w-full h-full object-contain cursor-pointer"
-          onClick={handleVideoClick}
-        />
+        <TransformWrapper>
+          <TransformComponent>
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted // Mute video to allow autoplay in most browsers
+              className="w-full h-full object-contain cursor-pointer"
+              onClick={handleVideoClick}
+            />
+          </TransformComponent>
+        </TransformWrapper>
         <audio
           ref={audioRef}
           autoPlay

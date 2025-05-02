@@ -77,9 +77,7 @@ export default function Liveview() {
       {!loading && !error && (
         <div
           className={`
-            grid ${getGridClass(streamCount)} gap-4 h-full
-            sm:grid-cols-1 md:grid-cols-2 lg:${getGridClass(streamCount)}
-            auto-rows-fr
+flex
           `}
         >
           {data.map((camera_with_stream) =>
@@ -95,13 +93,13 @@ export default function Liveview() {
                     streamId={stream.id}
                     serverUrl="http://localhost:4750"
                   />
-                  <div className="absolute bottom-4 right-4 z-10">
-                    <RecordingControlButton
-                      cameraId={camera_with_stream.camera.id}
-                      streamId={stream.id}
-                      buttonSize="sm"
-                    />
-                  </div>
+                  {/* <div className="absolute bottom-4 right-4 z-10"> */}
+                  {/*   <RecordingControlButton */}
+                  {/*     cameraId={camera_with_stream.camera.id} */}
+                  {/*     streamId={stream.id} */}
+                  {/*     buttonSize="sm" */}
+                  {/*   /> */}
+                  {/* </div> */}
                 </div>
               );
             })

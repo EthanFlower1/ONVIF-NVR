@@ -9,6 +9,8 @@ import DeviceDiscovery from './pages/discovery.tsx'
 import Liveview from './pages/live-view.tsx'
 import Recordings from './pages/recordings.tsx'
 import RecordingSchedules from './pages/recording-schedules.tsx'
+import { ProtectedRoute } from './components/ProtectedRoute'
+import { AuthProvider } from './contexts/AuthContext'
 import './App.css'
 
 // Placeholder Settings component
@@ -29,22 +31,75 @@ const Events = () => (
 
 function App() {
   return (
-    <Routes>
-      {/* Main application routes with Layout */}
-      <Route path="/" element={<Layout><Liveview /></Layout>} />
-      <Route path="/login" element={<AuthLayout><Login /></AuthLayout>} />
-      <Route path="/register" element={<AuthLayout><Register /></AuthLayout>} />
-      <Route path="/forgot-password" element={<AuthLayout><ForgotPassword /></AuthLayout>} />
-      <Route path="/settings" element={<Layout><Settings /></Layout>} />
-      <Route path="/events" element={<Layout><Events /></Layout>} />
-      <Route path="/cameras" element={<Layout><Cameras /></Layout>} />
-      <Route path="/discovery" element={<Layout><DeviceDiscovery /></Layout>} />
-      <Route path="/recordings" element={<Layout><Recordings /></Layout>} />
-      <Route path="/recording-schedules" element={<Layout><RecordingSchedules /></Layout>} />
+    <AuthProvider>
+      <Routes>
+        {/* Auth routes */}
+        <Route path="/login" element={<AuthLayout><Login /></AuthLayout>} />
+        <Route path="/register" element={<AuthLayout><Register /></AuthLayout>} />
+        <Route path="/forgot-password" element={<AuthLayout><ForgotPassword /></AuthLayout>} />
+        
+        {/* Protected application routes with Layout */}
+        <Route 
+          path="/" 
+          element={
+            <ProtectedRoute>
+              <Layout><Liveview /></Layout>
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="/settings" 
+          element={
+            <ProtectedRoute>
+              <Layout><Settings /></Layout>
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="/events" 
+          element={
+            <ProtectedRoute>
+              <Layout><Events /></Layout>
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="/cameras" 
+          element={
+            <ProtectedRoute>
+              <Layout><Cameras /></Layout>
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="/discovery" 
+          element={
+            <ProtectedRoute>
+              <Layout><DeviceDiscovery /></Layout>
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="/recordings" 
+          element={
+            <ProtectedRoute>
+              <Layout><Recordings /></Layout>
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="/recording-schedules" 
+          element={
+            <ProtectedRoute>
+              <Layout><RecordingSchedules /></Layout>
+            </ProtectedRoute>
+          } 
+        />
 
-      {/* Catch-all route - redirect to home */}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        {/* Catch-all route - redirect to home */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AuthProvider>
   )
 }
 

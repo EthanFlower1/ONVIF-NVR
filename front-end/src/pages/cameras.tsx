@@ -110,12 +110,28 @@ export default function Cameras() {
   };
 
   // Placeholder delete function
-  const deleteCamera = (id: string) => {
+  const deleteCamera = async (id: string) => {
     // In a real implementation, you would make an API call to delete the camera
     console.log(`Deleting camera with ID: ${id}`);
+    try {
+      const response = await fetch(`http://localhost:4750/api/cameras/${id}`, {
+        method: 'DELETE',
+      });
 
-    // For now, we'll just remove it from the local state
-    setData(data.filter(item => item.camera.id !== id));
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const json = await response.json();
+      console.log("Response: ", json);
+
+      setData(data.filter(item => item.camera.id !== id));
+    } catch (e) {
+      setError(e);
+    } finally {
+      setLoading(false);
+    }
+
+
   };
 
   if (loading) return <div>Loading cameras...</div>;
