@@ -315,6 +315,7 @@ export default function Recordings() {
               <TableHeader>Camera</TableHeader>
               <TableHeader>Type</TableHeader>
               <TableHeader>Start Time</TableHeader>
+              <TableHeader>End Time</TableHeader>
               <TableHeader>Duration</TableHeader>
               <TableHeader>Resolution</TableHeader>
               <TableHeader>Size</TableHeader>
@@ -338,6 +339,7 @@ export default function Recordings() {
                     </Badge>
                   </TableCell>
                   <TableCell>{formatDate(recording.start_time)}</TableCell>
+                  <TableCell>{formatDate(recording.end_time ?? '')}</TableCell>
                   <TableCell>{formatDuration(recording.duration)}</TableCell>
                   <TableCell>{recording.resolution === "unknown" ? "Processing..." : recording.resolution}</TableCell>
                   <TableCell>{formatFileSize(recording.file_size)}</TableCell>
