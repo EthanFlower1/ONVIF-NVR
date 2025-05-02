@@ -9,6 +9,7 @@ use crate::stream_manager::StreamManager;
 use crate::utils::metadataparser::parse_onvif_event;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
+// use cocoa::appkit::NSEventType::NSCursorUpdate;
 use gstreamer as gst;
 use gstreamer::glib;
 use gstreamer::prelude::*;
@@ -17,6 +18,8 @@ use log::{debug, error, info, warn};
 use serde_json::json;
 use sqlx::PgPool;
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -62,6 +65,17 @@ pub struct RecordingStatus {
     pub event_type: RecordingEventType,
     pub segment_id: Option<u32>,
     pub parent_recording_id: Option<Uuid>,
+}
+
+enum DatabaseOperation {
+    UpdateSegment(
+        RecordingsRepository, // Replace with your actual repository type
+        String,               // location
+        u32,                  // fragment_id
+        u64,                  // fragment_duration
+        u64,                  // duration_ms
+        u64,                  // file_size
+    ),
 }
 
 impl RecordingManager {
@@ -189,10 +203,13 @@ impl RecordingManager {
         let recording_id = Uuid::new_v4();
         let now = Utc::now();
 
-match self.log_metadata_stream(&stream.id.to_string()) {
-    Ok(_) => println!("Successfully started logging metadata for stream {}", stream.id),
-    Err(e) => eprintln!("Failed to log metadata: {}", e),
-}
+        match self.log_metadata_stream(&stream.id.to_string()) {
+            Ok(_) => println!(
+                "Successfully started logging metadata for stream {}",
+                stream.id
+            ),
+            Err(e) => eprintln!("Failed to log metadata: {}", e),
+        }
         // Create directory structure with date-based hierarchy
         let date_path = now.format("%Y/%m/%d/%H").to_string();
         let camera_path = format!("{}", stream.name);
@@ -248,168 +265,168 @@ match self.log_metadata_stream(&stream.id.to_string()) {
         // Generate unique key for this recording
         let element_suffix = recording_id.to_string().replace("-", "");
 
-
-    //-----------------------------------------------------------------------------
-    // DETERMINE ACTUAL VIDEO CODEC FROM CAPS
-    //-----------------------------------------------------------------------------
-    // Create a temporary queue to get caps from tee
-    let temp_queue = gst::ElementFactory::make("queue")
-        .name(format!("temp_queue_{}", element_suffix))
-        .build()?;
-
-    // Add to pipeline and link to tee
-    pipeline.add(&temp_queue)?;
-    let tee_temp_pad = video_tee.request_pad_simple("src_%u")
-        .ok_or_else(|| anyhow!("Failed to get temporary tee src pad"))?;
-    let temp_sink_pad = temp_queue.static_pad("sink")
-        .ok_or_else(|| anyhow!("Failed to get temporary queue sink pad"))?;
-    tee_temp_pad.link(&temp_sink_pad)?;
-    temp_queue.sync_state_with_parent()?;
-
-    // Give the queue a moment to receive data
-    sleep(Duration::from_millis(500)).await;
-
-    // Get caps from the src pad
-    let temp_src_pad = temp_queue.static_pad("src")
-        .ok_or_else(|| anyhow!("Failed to get temporary queue src pad"))?;
-    
-    let video_caps = temp_src_pad.current_caps();
-    
-    // Determine actual video codec from caps
-    let video_codec = if let Some(caps) = video_caps {
-        if let Some(structure) = caps.structure(0) {
-            let mime_type = structure.name();
-            
-            // info!("Detected video caps: {}", structure.to_string());
-            
-            if mime_type.contains("x-rtp") {
-                // Extract encoding-name from RTP caps
-                if let Ok(encoding_name) = structure.get::<String>("encoding-name") {
-                    // info!("Detected video encoding from RTP caps: {}", encoding_name);
-                    encoding_name.to_lowercase()
-                } else {
-                    // info!("Could not determine encoding from RTP caps, using reported codec");
-                    video_codec.to_lowercase()
-                }
-            } else {
-                // For non-RTP caps, determine from media type
-                if mime_type.contains("h264") {
-                    "h264".to_string()
-                } else if mime_type.contains("h265") || mime_type.contains("hevc") {
-                    "h265".to_string()
-                } else if mime_type.contains("jpeg") || mime_type.contains("mjpeg") {
-                    "jpeg".to_string()
-                } else if mime_type.contains("vp8") {
-                    "vp8".to_string()
-                } else if mime_type.contains("vp9") {
-                    "vp9".to_string()
-                } else {
-                    // info!("Using reported video codec as fallback: {}", video_codec);
-                    video_codec.to_lowercase()
-                }
-            }
-        } else {
-            // info!("No structure in video caps, using reported codec");
-            video_codec.to_lowercase()
-        }
-    } else {
-        // info!("No video caps available, using reported codec");
-        video_codec.to_lowercase()
-    };
-
-    // Clean up temporary elements
-    tee_temp_pad.unlink(&temp_sink_pad)?;
-    temp_queue.set_state(gst::State::Null)?;
-    pipeline.remove(&temp_queue)?;
-    video_tee.release_request_pad(&tee_temp_pad);
-
-    //-----------------------------------------------------------------------------
-    // DETERMINE ACTUAL AUDIO CODEC FROM CAPS (if audio is available)
-    //-----------------------------------------------------------------------------
-    let audio_codec = if !audio_codec.is_empty() {
-        // Create a temporary queue to get caps from audio tee
-        let temp_audio_queue = gst::ElementFactory::make("queue")
-            .name(format!("temp_audio_queue_{}", element_suffix))
+        //-----------------------------------------------------------------------------
+        // DETERMINE ACTUAL VIDEO CODEC FROM CAPS
+        //-----------------------------------------------------------------------------
+        // Create a temporary queue to get caps from tee
+        let temp_queue = gst::ElementFactory::make("queue")
+            .name(format!("temp_queue_{}", element_suffix))
             .build()?;
 
         // Add to pipeline and link to tee
-        pipeline.add(&temp_audio_queue)?;
-        if let Some(audio_tee_pad) = audio_tee.request_pad_simple("src_%u") {
-            if let Some(temp_audio_sink_pad) = temp_audio_queue.static_pad("sink") {
-                if audio_tee_pad.link(&temp_audio_sink_pad).is_ok() {
-                    temp_audio_queue.sync_state_with_parent()?;
+        pipeline.add(&temp_queue)?;
+        let tee_temp_pad = video_tee
+            .request_pad_simple("src_%u")
+            .ok_or_else(|| anyhow!("Failed to get temporary tee src pad"))?;
+        let temp_sink_pad = temp_queue
+            .static_pad("sink")
+            .ok_or_else(|| anyhow!("Failed to get temporary queue sink pad"))?;
+        tee_temp_pad.link(&temp_sink_pad)?;
+        temp_queue.sync_state_with_parent()?;
 
-                    // Give the queue a moment to receive data
-                    sleep(Duration::from_millis(500)).await;
+        // Give the queue a moment to receive data
+        sleep(Duration::from_millis(500)).await;
 
-                    // Get caps from the src pad
-                    if let Some(temp_audio_src_pad) = temp_audio_queue.static_pad("src") {
-                        if let Some(audio_caps) = temp_audio_src_pad.current_caps() {
-                            if let Some(structure) = audio_caps.structure(0) {
-                                let mime_type = structure.name();
-                                
-                                // info!("Detected audio caps: {}", structure.to_string());
-                                
-                                let detected_audio_codec = if mime_type.contains("x-rtp") {
-                                    // Extract encoding-name from RTP caps
-                                    if let Ok(encoding_name) = structure.get::<String>("encoding-name") {
-                                        // info!("Detected audio encoding from RTP caps: {}", encoding_name);
-                                        encoding_name.to_lowercase()
+        // Get caps from the src pad
+        let temp_src_pad = temp_queue
+            .static_pad("src")
+            .ok_or_else(|| anyhow!("Failed to get temporary queue src pad"))?;
+
+        let video_caps = temp_src_pad.current_caps();
+
+        // Determine actual video codec from caps
+        let video_codec = if let Some(caps) = video_caps {
+            if let Some(structure) = caps.structure(0) {
+                let mime_type = structure.name();
+
+                // info!("Detected video caps: {}", structure.to_string());
+
+                if mime_type.contains("x-rtp") {
+                    // Extract encoding-name from RTP caps
+                    if let Ok(encoding_name) = structure.get::<String>("encoding-name") {
+                        // info!("Detected video encoding from RTP caps: {}", encoding_name);
+                        encoding_name.to_lowercase()
+                    } else {
+                        // info!("Could not determine encoding from RTP caps, using reported codec");
+                        video_codec.to_lowercase()
+                    }
+                } else {
+                    // For non-RTP caps, determine from media type
+                    if mime_type.contains("h264") {
+                        "h264".to_string()
+                    } else if mime_type.contains("h265") || mime_type.contains("hevc") {
+                        "h265".to_string()
+                    } else if mime_type.contains("jpeg") || mime_type.contains("mjpeg") {
+                        "jpeg".to_string()
+                    } else if mime_type.contains("vp8") {
+                        "vp8".to_string()
+                    } else if mime_type.contains("vp9") {
+                        "vp9".to_string()
+                    } else {
+                        // info!("Using reported video codec as fallback: {}", video_codec);
+                        video_codec.to_lowercase()
+                    }
+                }
+            } else {
+                // info!("No structure in video caps, using reported codec");
+                video_codec.to_lowercase()
+            }
+        } else {
+            // info!("No video caps available, using reported codec");
+            video_codec.to_lowercase()
+        };
+
+        // Clean up temporary elements
+        tee_temp_pad.unlink(&temp_sink_pad)?;
+        temp_queue.set_state(gst::State::Null)?;
+        pipeline.remove(&temp_queue)?;
+        video_tee.release_request_pad(&tee_temp_pad);
+
+        //-----------------------------------------------------------------------------
+        // DETERMINE ACTUAL AUDIO CODEC FROM CAPS (if audio is available)
+        //-----------------------------------------------------------------------------
+        let audio_codec = if !audio_codec.is_empty() {
+            // Create a temporary queue to get caps from audio tee
+            let temp_audio_queue = gst::ElementFactory::make("queue")
+                .name(format!("temp_audio_queue_{}", element_suffix))
+                .build()?;
+
+            // Add to pipeline and link to tee
+            pipeline.add(&temp_audio_queue)?;
+            if let Some(audio_tee_pad) = audio_tee.request_pad_simple("src_%u") {
+                if let Some(temp_audio_sink_pad) = temp_audio_queue.static_pad("sink") {
+                    if audio_tee_pad.link(&temp_audio_sink_pad).is_ok() {
+                        temp_audio_queue.sync_state_with_parent()?;
+
+                        if let Some(temp_audio_src_pad) = temp_audio_queue.static_pad("src") {
+                            if let Some(audio_caps) = temp_audio_src_pad.current_caps() {
+                                if let Some(structure) = audio_caps.structure(0) {
+                                    let mime_type = structure.name();
+
+                                    // info!("Detected audio caps: {}", structure.to_string());
+
+                                    let detected_audio_codec = if mime_type.contains("x-rtp") {
+                                        // Extract encoding-name from RTP caps
+                                        if let Ok(encoding_name) =
+                                            structure.get::<String>("encoding-name")
+                                        {
+                                            // info!("Detected audio encoding from RTP caps: {}", encoding_name);
+                                            encoding_name.to_lowercase()
+                                        } else {
+                                            // info!("Could not determine encoding from audio RTP caps, using reported codec");
+                                            audio_codec.to_lowercase()
+                                        }
                                     } else {
-                                        // info!("Could not determine encoding from audio RTP caps, using reported codec");
-                                        audio_codec.to_lowercase()
-                                    }
+                                        // For non-RTP caps, determine from media type
+                                        if mime_type.contains("pcmu") {
+                                            "pcmu".to_string()
+                                        } else if mime_type.contains("pcma") {
+                                            "pcma".to_string()
+                                        } else if mime_type.contains("aac") {
+                                            "aac".to_string()
+                                        } else if mime_type.contains("mp4a") {
+                                            "mp4a-latm".to_string()
+                                        } else {
+                                            // info!("Using reported audio codec as fallback: {}", audio_codec);
+                                            audio_codec.to_lowercase()
+                                        }
+                                    };
+
+                                    // Clean up audio temp elements
+                                    audio_tee_pad.unlink(&temp_audio_sink_pad)?;
+                                    temp_audio_queue.set_state(gst::State::Null)?;
+                                    pipeline.remove(&temp_audio_queue)?;
+                                    audio_tee.release_request_pad(&audio_tee_pad);
+
+                                    detected_audio_codec
                                 } else {
-                                    // For non-RTP caps, determine from media type
-                                    if mime_type.contains("pcmu") {
-                                        "pcmu".to_string()
-                                    } else if mime_type.contains("pcma") {
-                                        "pcma".to_string()
-                                    } else if mime_type.contains("aac") {
-                                        "aac".to_string()
-                                    } else if mime_type.contains("mp4a") {
-                                        "mp4a-latm".to_string()
-                                    } else {
-                                        // info!("Using reported audio codec as fallback: {}", audio_codec);
-                                        audio_codec.to_lowercase()
-                                    }
-                                };
-
-                                // Clean up audio temp elements
-                                audio_tee_pad.unlink(&temp_audio_sink_pad)?;
-                                temp_audio_queue.set_state(gst::State::Null)?;
-                                pipeline.remove(&temp_audio_queue)?;
-                                audio_tee.release_request_pad(&audio_tee_pad);
-                                
-                                detected_audio_codec
+                                    // info!("No structure in audio caps, using reported codec");
+                                    audio_codec.to_lowercase()
+                                }
                             } else {
-                                // info!("No structure in audio caps, using reported codec");
+                                // info!("No audio caps available, using reported codec");
                                 audio_codec.to_lowercase()
                             }
                         } else {
-                            // info!("No audio caps available, using reported codec");
+                            // info!("Could not get audio src pad, using reported codec");
                             audio_codec.to_lowercase()
                         }
                     } else {
-                        // info!("Could not get audio src pad, using reported codec");
+                        // info!("Could not link audio tee to temp queue, using reported codec");
                         audio_codec.to_lowercase()
                     }
                 } else {
-                    // info!("Could not link audio tee to temp queue, using reported codec");
+                    // info!("Could not get audio sink pad, using reported codec");
                     audio_codec.to_lowercase()
                 }
             } else {
-                // info!("Could not get audio sink pad, using reported codec");
+                // info!("Could not get audio tee pad, using reported codec");
                 audio_codec.to_lowercase()
             }
         } else {
-            // info!("Could not get audio tee pad, using reported codec");
-            audio_codec.to_lowercase()
-        }
-    } else {
-        // info!("No audio tee available, using empty string for audio codec");
-        "".to_string()
-    };
+            // info!("No audio tee available, using empty string for audio codec");
+            "".to_string()
+        };
 
         //-----------------------------------------------------------------------------
         // MUXER & SPLITMUXSINK SETUP - Using the same format for all codecs
@@ -478,220 +495,206 @@ match self.log_metadata_stream(&stream.id.to_string()) {
         let start_time_clone = now;
         let segment_duration_clone = self.segment_duration;
 
-        // Instead of using format-location-full, use the regular format-location signal
-        // which is more widely supported and compatible
-        let dir_path_clone = dir_path.clone();
-splitmuxsink.connect("format-location-full", false, move |args| {
-    // This is called when a new segment file is about to be created
-    if args.len() < 3 {
-        warn!(
-            "format-location-full signal has fewer than expected arguments: {}",
-            args.len()
-        );
-        let fallback_name = format!(
-            "{}/segment_emergency.{}",
-            dir_path_clone.to_str().unwrap(),
-            format_clone
-        );
-        return Some(fallback_name.to_value());
-    }
+        // At application startup
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+        let tx_clone = tx.clone();
 
-    // Log argument details for debugging
-    // info!("format-location-full signal: got {} args", args.len());
-    // for (i, arg) in args.iter().enumerate() {
-    //     info!("  Arg {}: type = {}", i, arg.type_().name());
-    // }
-
-    // Get the fragment ID (index)
-    let fragment_id = match args[1].get::<u32>() {
-        Ok(id) => id,
-        Err(e) => {
-            warn!("Failed to get fragment ID: {}", e);
-            0 // Default to 0 if we can't get the ID
-        }
-    };
-    let now = Utc::now();
-    let timestamp = now.format("%Y%m%d_%H%M%S").to_string();
-
-    // Extract the GstSample containing the first buffer that will go into this file
-    let first_sample = match args[2].get::<gst::Sample>() {
-        Ok(sample) => sample,
-        Err(e) => {
-            warn!("Failed to get first sample: {}", e);
-            // Continue with less information
-            let segment_filename = format!(
-                "{}/{}.{}",
-                dir_path_clone.to_str().unwrap(),
-                timestamp,
-                format_clone
-            );
-            // info!("Generated segment filename (without sample data): {}", segment_filename);
-            return Some(segment_filename.to_value());
-        }
-    };
-
-    // Get buffer from sample
-    let buffer = match first_sample.buffer() {
-        Some(buf) => buf,
-        None => {
-            warn!("No buffer in first sample");
-            let segment_filename = format!(
-                "{}/{}.{}",
-                dir_path_clone.to_str().unwrap(),
-                timestamp,
-                format_clone
-            );
-            return Some(segment_filename.to_value());
-        }
-    };
-
-    // Extract timing information from the buffer
-    let pts = buffer.pts();
-    let dts = buffer.dts();
-    let duration = buffer.duration();
-    
-    // Get caps information (format, resolution, etc.)
-// Get caps information (format, resolution, etc.)
-// Get caps information (format, resolution, etc.)
-let caps = match first_sample.caps() {
-    Some(c) => c,
-    None => {
-        warn!("No caps in first sample");
-        // Create a basic empty caps
-        &gst::Caps::new_empty()
-    }
-};
-
-    // Extract video-specific information from caps
-    let caps_str = caps.to_string();
-    let mut width = 0;
-    let mut height = 0;
-    let mut framerate_num = 0;
-    let mut framerate_den = 1;
-    let mut mime_type = "unknown";
-    
-    if let Some(structure) = caps.structure(0) {
-        mime_type = structure.name();
-        width = structure.get::<i32>("width").unwrap_or(0);
-        height = structure.get::<i32>("height").unwrap_or(0);
-        
-if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
-        framerate_num = fraction.numer();
-        framerate_den = fraction.denom();
-    }
-    }
-
-    // info!("Fragment ID: {}, PTS: {:?}, Width: {}, Height: {}", 
-    //       fragment_id, pts, width, height);
-
-    // Create a filename using our own format
-    let segment_filename = format!(
-        "{}/{}.{}",
-        dir_path_clone.to_str().unwrap(),
-        timestamp,
-        format_clone
-    );
-
-    // info!("Generated segment filename: {}", segment_filename);
-
-    // Create a unique ID for this segment
-    let segment_id = Uuid::new_v4();
-
-    // Calculate precise segment start time using PTS if available
-    let segment_start = if let Some(pts_time) = pts {
-        // Convert PTS to milliseconds and add to the base start time
-        let pts_ms = pts_time.mseconds();
-        start_time_clone + chrono::Duration::milliseconds(pts_ms as i64)
-    } else {
-        // Fall back to our estimate based on fragment ID
-        start_time_clone + chrono::Duration::seconds((fragment_id as i64) * segment_duration_clone)
-    };
-
-    // Calculate actual frame rate from caps if available
-    let fps = if framerate_num > 0 && framerate_den > 0 {
-        (framerate_num as f64 / framerate_den as f64) as u32
-    } else {
-        stream_clone.framerate.unwrap_or(30) as u32
-    };
-
-    // Create segment metadata with detailed information from sample
-    let segment_metadata = serde_json::json!({
-        "status": "processing",
-        "finalized": false,
-        "segment_type": "time_based",
-        "creation_time": chrono::Utc::now().to_rfc3339(),
-        "video_info": {
-            "mime_type": mime_type,
-            "width": width,
-            "height": height,
-            "framerate_num": framerate_num,
-            "framerate_den": framerate_den,
-            "has_pts": pts.is_some(),
-            "has_dts": dts.is_some(),
-            "buffer_duration_ns": duration.map(|d| d.nseconds()).unwrap_or(0),
-            "caps_string": caps_str,
-        }
-    });
-
-    // Create a segment recording entry with more accurate information
-    let resolution = if width > 0 && height > 0 {
-        format!("{}x{}", width, height)
-    } else {
-        stream_clone.resolution.clone().unwrap_or_else(|| "unknown".to_string())
-    };
-
-    let segment_recording = Recording {
-        id: segment_id,
-        camera_id: stream_clone.camera_id,
-        stream_id: stream_clone.id,
-        start_time: segment_start,
-        end_time: None,
-        file_path: std::path::PathBuf::from(&segment_filename),
-        file_size: 0,
-        duration: 0,
-        format: format_clone.clone(),
-        resolution,
-        fps,
-        event_type: event_type_clone,
-        metadata: Some(segment_metadata),
-        schedule_id: schedule_id_clone,
-        segment_id: Some(fragment_id), // Store the segment ID directly
-        parent_recording_id: Some(recording_id_clone), // Store parent recording ID directly
-    };
-
-    // We can't use tokio::spawn directly in the GStreamer thread as it's not inside the Tokio runtime
-    // Instead, we'll use a std::thread to bridge between GStreamer and Tokio
-    let recording_clone = segment_recording.clone();
-    let recordings_repo = recordings_repo_clone.clone();
-    let fragment_id_clone = fragment_id;
-    std::thread::spawn(move || {
-        // Create a simple runtime for this operation
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create Tokio runtime");
-
-        // Run the async operation to create the recording entry
-        rt.block_on(async {
-            match recordings_repo.create(&recording_clone).await {
-                Ok(_) => {
-                    // info!(
-                    //     "Created database entry for segment {}: {}",
-                    //     fragment_id_clone, segment_id_clone
-                    // );
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to create database entry for segment {}: {}",
-                        fragment_id_clone, e
-                    );
+        // Spawn a task to process database operations
+        tokio::spawn(async move {
+            while let Some((recording, fragment_id)) = rx.recv().await {
+                if let Err(e) = recordings_repo_clone.create(&recording).await {
+                    error!("Failed to create entry for segment {}: {}", fragment_id, e);
                 }
             }
         });
-    });
 
-    Some(segment_filename.to_value())
-});
+        // Instead of using format-location-full, use the regular format-location signal
+        // which is more widely supported and compatible
+        let dir_path_clone = dir_path.clone();
+        splitmuxsink.connect("format-location-full", false, move |args| {
+            // This is called when a new segment file is about to be created
+            if args.len() < 3 {
+                warn!(
+                    "format-location-full signal has fewer than expected arguments: {}",
+                    args.len()
+                );
+                let fallback_name = format!(
+                    "{}/segment_emergency.{}",
+                    dir_path_clone.to_str().unwrap(),
+                    format_clone
+                );
+                return Some(fallback_name.to_value());
+            }
+
+            // Log argument details for debugging
+            // info!("format-location-full signal: got {} args", args.len());
+            // for (i, arg) in args.iter().enumerate() {
+            //     info!("  Arg {}: type = {}", i, arg.type_().name());
+            // }
+
+            // Get the fragment ID (index)
+            let fragment_id = match args[1].get::<u32>() {
+                Ok(id) => id,
+                Err(e) => {
+                    warn!("Failed to get fragment ID: {}", e);
+                    0 // Default to 0 if we can't get the ID
+                }
+            };
+            let now = Utc::now();
+            let timestamp = now.format("%Y%m%d_%H%M%S").to_string();
+
+            // Extract the GstSample containing the first buffer that will go into this file
+            let first_sample = match args[2].get::<gst::Sample>() {
+                Ok(sample) => sample,
+                Err(e) => {
+                    warn!("Failed to get first sample: {}", e);
+                    // Continue with less information
+                    let segment_filename = format!(
+                        "{}/{}.{}",
+                        dir_path_clone.to_str().unwrap(),
+                        timestamp,
+                        format_clone
+                    );
+                    // info!("Generated segment filename (without sample data): {}", segment_filename);
+                    return Some(segment_filename.to_value());
+                }
+            };
+
+            // Get buffer from sample
+            let buffer = match first_sample.buffer() {
+                Some(buf) => buf,
+                None => {
+                    warn!("No buffer in first sample");
+                    let segment_filename = format!(
+                        "{}/{}.{}",
+                        dir_path_clone.to_str().unwrap(),
+                        timestamp,
+                        format_clone
+                    );
+                    return Some(segment_filename.to_value());
+                }
+            };
+
+            // Extract timing information from the buffer
+            let pts = buffer.pts();
+            let dts = buffer.dts();
+            let duration = buffer.duration();
+
+            // Get caps information (format, resolution, etc.)
+            // Get caps information (format, resolution, etc.)
+            // Get caps information (format, resolution, etc.)
+            let caps = match first_sample.caps() {
+                Some(c) => c,
+                None => {
+                    warn!("No caps in first sample");
+                    // Create a basic empty caps
+                    &gst::Caps::new_empty()
+                }
+            };
+
+            // Extract video-specific information from caps
+            let caps_str = caps.to_string();
+            let mut width = 0;
+            let mut height = 0;
+            let mut framerate_num = 0;
+            let mut framerate_den = 1;
+            let mut mime_type = "unknown";
+
+            if let Some(structure) = caps.structure(0) {
+                mime_type = structure.name();
+                width = structure.get::<i32>("width").unwrap_or(0);
+                height = structure.get::<i32>("height").unwrap_or(0);
+
+                if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
+                    framerate_num = fraction.numer();
+                    framerate_den = fraction.denom();
+                }
+            }
+
+            // info!("Fragment ID: {}, PTS: {:?}, Width: {}, Height: {}",
+            //       fragment_id, pts, width, height);
+
+            // Create a filename using our own format
+            let segment_filename = format!(
+                "{}/{}.{}",
+                dir_path_clone.to_str().unwrap(),
+                timestamp,
+                format_clone
+            );
+            let segment_id = Uuid::new_v4();
+            let segment_start = if let Some(pts_time) = pts {
+                let pts_ms = pts_time.mseconds();
+                start_time_clone + chrono::Duration::milliseconds(pts_ms as i64)
+            } else {
+                // Fall back to our estimate based on fragment ID
+                start_time_clone
+                    + chrono::Duration::seconds((fragment_id as i64) * segment_duration_clone)
+            };
+
+            // Calculate actual frame rate from caps if available
+            let fps = if framerate_num > 0 && framerate_den > 0 {
+                (framerate_num as f64 / framerate_den as f64) as u32
+            } else {
+                stream_clone.framerate.unwrap_or(30) as u32
+            };
+
+            // Create segment metadata with detailed information from sample
+            let segment_metadata = serde_json::json!({
+                "status": "processing",
+                "finalized": false,
+                "segment_type": "time_based",
+                "creation_time": chrono::Utc::now().to_rfc3339(),
+                "video_info": {
+                    "mime_type": mime_type,
+                    "width": width,
+                    "height": height,
+                    "framerate_num": framerate_num,
+                    "framerate_den": framerate_den,
+                    "has_pts": pts.is_some(),
+                    "has_dts": dts.is_some(),
+                    "buffer_duration_ns": duration.map(|d| d.nseconds()).unwrap_or(0),
+                    "caps_string": caps_str,
+                }
+            });
+
+            // Create a segment recording entry with more accurate information
+            let resolution = if width > 0 && height > 0 {
+                format!("{}x{}", width, height)
+            } else {
+                stream_clone
+                    .resolution
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string())
+            };
+
+            let segment_recording = Recording {
+                id: segment_id,
+                camera_id: stream_clone.camera_id,
+                stream_id: stream_clone.id,
+                start_time: segment_start,
+                end_time: None,
+                file_path: std::path::PathBuf::from(&segment_filename),
+                file_size: 0,
+                duration: 0,
+                format: format_clone.clone(),
+                resolution,
+                fps,
+                event_type: event_type_clone,
+                metadata: Some(segment_metadata),
+                schedule_id: schedule_id_clone,
+                segment_id: Some(fragment_id), // Store the segment ID directly
+                parent_recording_id: Some(recording_id_clone), // Store parent recording ID directly
+            };
+
+            // We can't use tokio::spawn directly in the GStreamer thread as it's not inside the Tokio runtime
+            // Instead, we'll use a std::thread to bridge between GStreamer and Tokio
+            // Create a shared Tokio runtime once at application startup
+            // When you need to execute async tasks from sync code:
+
+            let _ = tx_clone.try_send((segment_recording.clone(), fragment_id));
+
+            Some(segment_filename.to_value())
+        });
         // [Code for signal handler remains the same]
 
         //-----------------------------------------------------------------------------
@@ -982,19 +985,18 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             }
         }
 
-
         // 3. Link video to splitmuxsink
         // info!("Linking video parse to splitmuxsink");
-            if let Some(sink_pad) = splitmuxsink.request_pad_simple("video") {
-                let src_pad = video_parse.static_pad("src").unwrap();
-                if let Err(e) = src_pad.link(&sink_pad) {
-                    error!("Failed to link video with requested pad: {}", e);
-                    return Err(anyhow!("Failed to link video pipeline: {}", e));
-                }
-                // info!("Successfully linked video using requested pad");
-            } else {
-                return Err(anyhow!("Failed to link video pipeline to splitmuxsink"));
+        if let Some(sink_pad) = splitmuxsink.request_pad_simple("video") {
+            let src_pad = video_parse.static_pad("src").unwrap();
+            if let Err(e) = src_pad.link(&sink_pad) {
+                error!("Failed to link video with requested pad: {}", e);
+                return Err(anyhow!("Failed to link video pipeline: {}", e));
             }
+            // info!("Successfully linked video using requested pad");
+        } else {
+            return Err(anyhow!("Failed to link video pipeline to splitmuxsink"));
+        }
 
         // 4. Link audio to splitmuxsink if available
         if let Some((_, _, _, _, _, _, _, audio_parse)) = &audio_elements {
@@ -1015,7 +1017,6 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             }
         }
 
-
         // 5. Connect the video tee to the video queue
         let tee_src_pad = video_tee
             .request_pad_simple("src_%u")
@@ -1027,7 +1028,6 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
 
         // Link the tee to the queue
         tee_src_pad.link(&queue_sink_pad)?;
-
 
         // if let Some(tee_src_pad) = video_tee.request_pad_simple("src_%u") {
         //     if let Some(queue_sink_pad) = video_queue.static_pad("sink") {
@@ -1113,35 +1113,107 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             // );
             let _retry_result = pipeline.set_state(gst::State::Playing);
         }
+        // At application startup, create a channel
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+        // Process the data...
+        // Spawn a dedicated Tokio task to handle database operations
+        tokio::spawn(async move {
+            while let Some(operation) = rx.recv().await {
+                match operation {
+                    DatabaseOperation::UpdateSegment(
+                        recordings_repo,
+                        location,
+                        fragment_id,
+                        fragment_duration,
+                        duration_ms,
+                        file_size,
+                    ) => {
+                        // First, fetch the recording entry by segment location
+                        match recordings_repo.get_segment(&location).await {
+                            Ok(Some(mut recording)) => {
+                                // Update the recording with final values
+                                recording.file_size = file_size;
+                                recording.duration = duration_ms;
+
+                                // Update the metadata to mark it as finalized
+                                if let Some(metadata) = recording.metadata {
+                                    let mut metadata_map = metadata.as_object().unwrap().clone();
+                                    metadata_map.insert("status".to_string(), json!("completed"));
+                                    metadata_map.insert("finalized".to_string(), json!(true));
+                                    metadata_map.insert(
+                                        "finalize_time".to_string(),
+                                        json!(chrono::Utc::now().to_rfc3339()),
+                                    );
+                                    metadata_map.insert(
+                                        "fragment_duration_ns".to_string(),
+                                        json!(fragment_duration),
+                                    );
+
+                                    recording.metadata = Some(json!(metadata_map));
+                                }
+
+                                // Calculate end time based on fragment duration
+                                recording.end_time = Some(
+                                    recording.start_time
+                                        + chrono::Duration::milliseconds(duration_ms as i64),
+                                );
+
+                                // Update the recording in the database
+                                if let Err(e) = recordings_repo.update(&recording).await {
+                                    error!(
+                                        "Failed to update recording for fragment {}: {}",
+                                        fragment_id, e
+                                    );
+                                }
+                            }
+                            Ok(None) => {
+                                error!(
+                                    "Could not find recording entry for fragment {}",
+                                    fragment_id
+                                );
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Error finding recording for fragment {}: {}",
+                                    fragment_id, e
+                                );
+                            }
+                        }
+                    }
+                    // Other operation types can be added here
+                    _ => {}
+                }
+            }
+        });
 
         let bus = pipeline.bus().unwrap();
         let recordings_repo_clone = self.recordings_repo.clone();
         let recording_id_clone = recording_id;
 
-        // Clone for bus watch
-        let recordings_repo_for_watch = recordings_repo_clone.clone();
-        
+        // Clone the sender for the bus watch
+        let tx_clone = tx.clone();
+
         let watch_id = bus.add_watch(move |_, msg| {
             match msg.view() {
                 gst::MessageView::Element(element_msg) => {
                     if let Some(structure) = element_msg.structure() {
                         let name = structure.name();
-                        
+
                         if name == "splitmuxsink-fragment-closed" {
                             // Extract values from the message
                             if let (Ok(fragment_id), Ok(location), Ok(fragment_duration)) = (
                                 structure.get::<u32>("fragment-id"),
                                 structure.get::<String>("location"),
-                                structure.get::<u64>("fragment-duration")
+                                structure.get::<u64>("fragment-duration"),
                             ) {
                                 info!(
-                                    "Fragment {} closed: location={}, duration={}ns", 
+                                    "Fragment {} closed: location={}, duration={}ns",
                                     fragment_id, location, fragment_duration
                                 );
-                                
+
                                 // Convert duration from nanoseconds to milliseconds for database
                                 let duration_ms = fragment_duration / 1_000_000;
-                                
+
                                 // Get the file size
                                 let file_size = match std::fs::metadata(&location) {
                                     Ok(metadata) => metadata.len(),
@@ -1150,94 +1222,46 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                                         0
                                     }
                                 };
-                                
-                                // Update the segment recording in the database
-                                // We need to use a thread to bridge between GStreamer and Tokio
-                                let recordings_repo_for_thread = recordings_repo_for_watch.clone();
+
+                                // Just send the data to the channel for async processing
+                                let recordings_repo_for_thread = recordings_repo_clone.clone();
                                 let location_clone = location.clone();
                                 let fragment_id_clone = fragment_id;
                                 let fragment_duration_clone = fragment_duration;
                                 let duration_ms_clone = duration_ms;
                                 let file_size_clone = file_size;
-                                
-                                std::thread::spawn(move || {
-                                    // Create a runtime for this thread
-                                    let rt = tokio::runtime::Builder::new_current_thread()
-                                        .enable_all()
-                                        .build()
-                                        .expect("Failed to create Tokio runtime");
-                                    
-                                    rt.block_on(async {
-                                        // First, fetch the recording entry by parent_recording_id and segment_id
-                                        match recordings_repo_for_thread.get_segment(&location_clone).await {
-                                            Ok(Some(mut recording)) => {
-                                                // Update the recording with final values
-                                                recording.file_size = file_size_clone;
-                                                recording.duration = duration_ms_clone;
-                                                
-                                                // Update the metadata to mark it as finalized
-                                                if let Some(metadata) = recording.metadata {
-                                                    let mut metadata_map = metadata.as_object().unwrap().clone();
-                                                    metadata_map.insert("status".to_string(), json!("completed"));
-                                                    metadata_map.insert("finalized".to_string(), json!(true));
-                                                    metadata_map.insert("finalize_time".to_string(), 
-                                                        json!(chrono::Utc::now().to_rfc3339()));
-                                                    metadata_map.insert("fragment_duration_ns".to_string(), 
-                                                        json!(fragment_duration_clone));
-                                                    
-                                                    recording.metadata = Some(json!(metadata_map));
-                                                }
-                                                
-                                                // Calculate end time based on fragment duration
-                                                recording.end_time = Some(
-                                                    recording.start_time + chrono::Duration::milliseconds(duration_ms_clone as i64)
-                                                );
-                                                
-                                                // Update the recording in the database
-                                                if let Err(e) = recordings_repo_for_thread.update(&recording).await {
-                                                    error!(
-                                                        "Failed to update recording for fragment {}: {}", 
-                                                        fragment_id_clone, e
-                                                    );
-                                                } else {
-                                                    // info!(
-                                                    //     "Updated recording for fragment {}, duration={}ms, size={}bytes", 
-                                                    //     fragment_id_clone, duration_ms_clone, file_size_clone
-                                                    // );
-                                                }
-                                            },
-                                            Ok(None) => {
-                                                error!(
-                                                    "Could not find recording entry for fragment {}", 
-                                                    fragment_id_clone
-                                                );
-                                            },
-                                            Err(e) => {
-                                                error!(
-                                                    "Error finding recording for fragment {}: {}", 
-                                                    fragment_id_clone, e
-                                                );
-                                            }
-                                        }
-                                    });
-                                });
+
+                                // Send the update request through the channel
+                                let _ = tx_clone.try_send(DatabaseOperation::UpdateSegment(
+                                    recordings_repo_for_thread,
+                                    location_clone,
+                                    fragment_id_clone,
+                                    fragment_duration_clone,
+                                    duration_ms_clone,
+                                    file_size_clone,
+                                ));
                             } else {
                                 warn!("Missing fields in fragment-closed message: {:?}", structure);
                             }
                         }
                     }
-                },
+                }
                 gst::MessageView::Eos(_) => {
-                    debug!("End of stream received for recording {}", recording_id_clone);
-                },
+                    debug!(
+                        "End of stream received for recording {}",
+                        recording_id_clone
+                    );
+                }
                 gst::MessageView::Error(err) => {
                     error!(
-                        "Error from {}: {} ({})", 
-                        err.src().map(|s| s.name()).unwrap_or_else(|| "unknown".into()),
+                        "Error from {}: {} ({})",
+                        err.src()
+                            .map(|s| s.name())
+                            .unwrap_or_else(|| "unknown".into()),
                         err.error(),
                         err.debug().unwrap_or_else(|| "no debug info".into())
                     );
-                },
+                }
                 _ => {}
             }
             glib::ControlFlow::Continue
@@ -1754,7 +1778,7 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
                     duration,
                     file_size,
                     pipeline_state: state_str,
-                    fps: 0,         // Not available from pipeline
+                    fps: 0, // Not available from pipeline
                     event_type: recording.event_type,
                     segment_id: recording.segment_id,
                     parent_recording_id: recording.parent_recording_id,
@@ -1801,9 +1825,9 @@ if let Ok(fraction) = structure.get::<gst::Fraction>("framerate") {
             })
     }
 
-pub fn log_metadata_stream(&self, stream_id: &str) -> Result<()> {
-    // Get access to the pipeline and tees
-    let (pipeline, _video_tee, _audio_tee, metadata_tee) = self
+    pub fn log_metadata_stream(&self, stream_id: &str) -> Result<()> {
+        // Get access to the pipeline and tees
+        let (pipeline, _video_tee, _audio_tee, metadata_tee) = self
             .stream_manager
             .get_stream_access(stream_id)
             .map_err(|e| {
@@ -1811,130 +1835,132 @@ pub fn log_metadata_stream(&self, stream_id: &str) -> Result<()> {
                 anyhow!("Failed to get video stream access: {}", e)
             })?;
 
-    // Create elements for the metadata branch
-    let queue = gst::ElementFactory::make("queue")
-        .name(&format!("metadata_logger_queue_{}", stream_id))
-        .build()?;
+        // Create elements for the metadata branch
+        let queue = gst::ElementFactory::make("queue")
+            .name(&format!("metadata_logger_queue_{}", stream_id))
+            .build()?;
 
-    let depay = gst::ElementFactory::make("rtponvifmetadatadepay")
-        .name(&format!("metadata_logger_depay_{}", stream_id))
-        .build()?;
-    
-    // Create a sink that will handle the metadata
-    let sink = gst::ElementFactory::make("appsink")
-        .name(&format!("metadata_sink_{}", stream_id))
-        .property("emit-signals", &true)
-        .property("sync", &false)
-        .build()?;
-    
-    // Add all elements to the pipeline
-    pipeline.add_many(&[&queue, &depay, &sink])?;
-    
-    // Link the elements together
-    gst::Element::link_many(&[&queue, &depay, &sink])?;
-    
-    // Request a pad from the tee and link it to our queue
-    let tee_src_pad = metadata_tee.request_pad_simple("src_%u").ok_or_else(|| {
-        anyhow!("Failed to get source pad from metadata tee")
-    })?;
-    
-    let queue_sink_pad = queue.static_pad("sink").ok_or_else(|| {
-        anyhow!("Failed to get sink pad from queue")
-    })?;
-    
-    tee_src_pad.link(&queue_sink_pad)?;
-    
-    // Get the appsink element and connect to new-sample signal
-    let appsink = sink.dynamic_cast::<AppSink>().unwrap();
-    
-    // Import the necessary types for metadata processing
-    appsink.set_callbacks(
-        AppSinkCallbacks::builder()
-            .new_sample(move |appsink| {
-                // Pull the sample from the sink
-                let sample = match appsink.pull_sample() {
-                    Ok(sample) => sample,
-                    Err(e) => {
-                        error!("Error pulling sample: {}", e);
-                        return Err(gst::FlowError::Eos);
-                    },
-                };
-                
-                // Extract the buffer from the sample
-                let buffer = match sample.buffer() {
-                    Some(buffer) => buffer,
-                    None => {
-                        error!("Received sample with no buffer");
-                        return Ok(gst::FlowSuccess::Ok);
+        let depay = gst::ElementFactory::make("rtponvifmetadatadepay")
+            .name(&format!("metadata_logger_depay_{}", stream_id))
+            .build()?;
+
+        // Create a sink that will handle the metadata
+        let sink = gst::ElementFactory::make("appsink")
+            .name(&format!("metadata_sink_{}", stream_id))
+            .property("emit-signals", &true)
+            .property("sync", &false)
+            .build()?;
+
+        // Add all elements to the pipeline
+        pipeline.add_many(&[&queue, &depay, &sink])?;
+
+        // Link the elements together
+        gst::Element::link_many(&[&queue, &depay, &sink])?;
+
+        // Request a pad from the tee and link it to our queue
+        let tee_src_pad = metadata_tee
+            .request_pad_simple("src_%u")
+            .ok_or_else(|| anyhow!("Failed to get source pad from metadata tee"))?;
+
+        let queue_sink_pad = queue
+            .static_pad("sink")
+            .ok_or_else(|| anyhow!("Failed to get sink pad from queue"))?;
+
+        tee_src_pad.link(&queue_sink_pad)?;
+
+        // Get the appsink element and connect to new-sample signal
+        let appsink = sink.dynamic_cast::<AppSink>().unwrap();
+
+        // Import the necessary types for metadata processing
+        appsink.set_callbacks(
+            AppSinkCallbacks::builder()
+                .new_sample(move |appsink| {
+                    // Pull the sample from the sink
+                    let sample = match appsink.pull_sample() {
+                        Ok(sample) => sample,
+                        Err(e) => {
+                            error!("Error pulling sample: {}", e);
+                            return Err(gst::FlowError::Eos);
+                        }
+                    };
+
+                    // Extract the buffer from the sample
+                    let buffer = match sample.buffer() {
+                        Some(buffer) => buffer,
+                        None => {
+                            error!("Received sample with no buffer");
+                            return Ok(gst::FlowSuccess::Ok);
+                        }
+                    };
+
+                    // Map the buffer to read its contents
+                    let map = match buffer.map_readable() {
+                        Ok(map) => map,
+                        Err(_) => {
+                            error!("Failed to map buffer");
+                            return Ok(gst::FlowSuccess::Ok);
+                        }
+                    };
+
+                    // Convert the buffer data to a string if it's XML
+                    match std::str::from_utf8(&map) {
+                        Ok(metadata_str) => {
+                            info!("Received metadata: {}", metadata_str);
+                            // let mut file = File::create("onvif-metadata.xml").map_err(|e| {
+                            //     println!("Error creating file for onvif-metadata");
+                            //     gstreamer::FlowError::Error // Replace with appropriate conversion
+                            // })?;
+                            //
+                            // // Write some bytes to the file
+                            // let mut buf_writer = BufWriter::new(file);
+                            // buf_writer.write_all(
+                            //     b"Buffered write is more efficient for multiple writes",
+                            // )?;
+                            // buf_writer.flush()?; // Ensure all data is written
+                            //
+                            // Example 2: Appending to a file
+                            let file = OpenOptions::new()
+                                .write(true)
+                                .append(true)
+                                .create(true)
+                                .open("onvif-metadata.xml")
+                                .map_err(|_e| {
+                                    println!("Error creating file for onvif-metadata");
+                                    gstreamer::FlowError::Error // Replace with appropriate conversion
+                                })?;
+                            let mut buf_writer = BufWriter::new(file);
+
+                            buf_writer.write_all(&map).map_err(|_e| {
+                                println!("Error creating file for onvif-metadata");
+                                gstreamer::FlowError::Error // Replace with appropriate conversion
+                            })?;
+
+                            let metadata = parse_onvif_event(metadata_str).unwrap();
+                            println!(
+                                "Parsed Event: {:#?}, active: {:#?}",
+                                metadata.event_type,
+                                metadata.is_active.unwrap()
+                            );
+                        }
+                        Err(_) => {
+                            // If it's not UTF-8 (could be binary format like KLV)
+                            debug!("Received binary metadata of size: {} bytes", map.len());
+                        }
                     }
-                };
-                
-                // Map the buffer to read its contents
-                let map = match buffer.map_readable() {
-                    Ok(map) => map,
-                    Err(_) => {
-                        error!("Failed to map buffer");
-                        return Ok(gst::FlowSuccess::Ok);
-                    }
-                };
-                
-                // Convert the buffer data to a string if it's XML
-                match std::str::from_utf8(&map) {
-                    Ok(metadata_str) => {
-                        info!("Received metadata: {}", metadata_str);
 
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
 
+        // Make sure these elements start in the right state
+        queue.sync_state_with_parent()?;
+        depay.sync_state_with_parent()?;
+        appsink.sync_state_with_parent()?;
 
-                let metadata = parse_onvif_event(metadata_str).unwrap();
-                println!("Parsed Event: {:#?}, active: {:#?}", metadata.event_type, metadata.is_active.unwrap());
-                        // Parse the metadata using yaserde
-                        // match yaserde::de::from_str::<MetadataStream>(metadata_str) {
-                        //     Ok(metadata_stream) => {
-                        //             info!("METADATA STREAM {:?}", metadata_stream);
-                        //         // Process based on metadata type
-                        //         match &metadata_stream.metadata_stream_choice {
-                        //             metadata_stream::MetadataStreamChoice::VideoAnalytics(analytics) => {
-                        //                 process_video_analytics(&analytics, &stream_id_clone);
-                        //             },
-                        //             metadata_stream::MetadataStreamChoice::Event(event_stream) => {
-                        //                 process_event_stream(&event_stream, &stream_id_clone);
-                        //             },
-                        //             metadata_stream::MetadataStreamChoice::Ptz(ptz_stream) => {
-                        //                 process_ptz_stream(&ptz_stream, &stream_id_clone);
-                        //             },
-                        //             metadata_stream::MetadataStreamChoice::Extension(extension) => {
-                        //                  info!("Extension metadata type: {:?}", extension);
-                        //             },
-                        //             metadata_stream::MetadataStreamChoice::__Unknown__(unknown) => {
-                        //                  info!("Unknown metadata type: {:?}", unknown);
-                        //                 }
-                        //         }
-                        //     },
-                        //     Err(e) => {
-                        //         error!("Failed to parse metadata: {}", e);
-                        //     }
-                        // }
-                    },
-                    Err(_) => {
-                        // If it's not UTF-8 (could be binary format like KLV)
-                        debug!("Received binary metadata of size: {} bytes", map.len());
-                    }
-                }
-                
-                Ok(gst::FlowSuccess::Ok)
-            })
-            .build()
-    );
-    
-    // Make sure these elements start in the right state
-    queue.sync_state_with_parent()?;
-    depay.sync_state_with_parent()?;
-    appsink.sync_state_with_parent()?;
+        info!("Metadata logging started for stream {}", stream_id);
 
-    info!("Metadata logging started for stream {}", stream_id);
-    
-    // Return success
-    Ok(())
+        // Return success
+        Ok(())
+    }
 }
-}
-
