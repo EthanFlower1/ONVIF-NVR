@@ -118,7 +118,7 @@ dependencies = [
 [[package]]
 name = "analytics"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "common",
  "onvif-xsd",
@@ -477,7 +477,7 @@ dependencies = [
 [[package]]
 name = "b_2"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "t_1",
  "validate",
@@ -792,7 +792,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "validate",
  "xml-rs",
@@ -1081,7 +1081,7 @@ dependencies = [
 [[package]]
 name = "devicemgmt"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "common",
  "onvif-xsd",
@@ -1229,7 +1229,7 @@ dependencies = [
 [[package]]
 name = "event"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "b_2",
  "t_1",
@@ -2581,7 +2581,7 @@ dependencies = [
 [[package]]
 name = "media"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "common",
  "onvif-xsd",
@@ -2612,7 +2612,7 @@ dependencies = [
 [[package]]
 name = "metadatastream"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "b_2",
  "common",
@@ -2871,7 +2871,7 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 [[package]]
 name = "onvif"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2904,7 +2904,7 @@ dependencies = [
 [[package]]
 name = "onvif-xsd"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "b_2",
  "common",
@@ -3295,7 +3295,7 @@ dependencies = [
 [[package]]
 name = "ptz"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "common",
  "onvif-xsd",
@@ -3723,7 +3723,7 @@ dependencies = [
 [[package]]
 name = "schema"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "analytics",
  "b_2",
@@ -3992,7 +3992,7 @@ dependencies = [
 [[package]]
 name = "soap_envelope"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "validate",
  "xml-rs",
@@ -4370,7 +4370,7 @@ dependencies = [
 [[package]]
 name = "t_1"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "validate",
  "xml-rs",
@@ -4741,7 +4741,7 @@ dependencies = [
 [[package]]
 name = "transport"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "async-trait",
  "thiserror 1.0.69",
@@ -4803,7 +4803,7 @@ checksum = "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f"
 [[package]]
 name = "types"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "validate",
  "xml-rs",
@@ -4910,7 +4910,7 @@ dependencies = [
 [[package]]
 name = "validate"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 
 [[package]]
 name = "vcpkg"
@@ -5639,7 +5639,7 @@ checksum = "1e9df38ee2d2c3c5948ea468a8406ff0db0b29ae1ffde1bcf20ef305bcc95c51"
 [[package]]
 name = "ws_addr"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "validate",
  "xml-rs",
@@ -5652,7 +5652,7 @@ dependencies = [
 [[package]]
 name = "ws_discovery"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "percent-encoding",
  "url",
@@ -5728,7 +5728,7 @@ checksum = "a62ce76d9b56901b19a74f19431b0d8b3bc7ca4ad685a746dfd78ca8f4fc6bda"
 [[package]]
 name = "xml_xsd"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "xml-rs",
  "yaserde",
@@ -5738,7 +5738,7 @@ dependencies = [
 [[package]]
 name = "xmlmime"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "validate",
  "xml-rs",
@@ -5760,7 +5760,7 @@ dependencies = [
 [[package]]
 name = "xop"
 version = "0.1.0"
-source = "git+https://github.com/EthanFlower1/onvif-rs.git#8931ca17363a28e16d8cd5f1a9284fa83b18ea10"
+source = "git+https://github.com/lumeohq/onvif-rs#8f1490e2ce5e2ddd29dbd3ab2586d7a90da0b6d6"
 dependencies = [
  "validate",
  "xml-rs",
