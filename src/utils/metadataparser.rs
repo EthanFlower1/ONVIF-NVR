@@ -167,6 +167,9 @@ pub struct OnvifEvent {
     pub area_index: Option<u32>,
     pub confidence: Option<f32>,
     pub data: HashMap<String, String>,
+    // These fields are populated after parse, by the recorder
+    pub camera_id: Option<String>,
+    pub stream_id: Option<String>,
 }
 
 impl TryFrom<MetadataStream> for OnvifEvent {
@@ -256,6 +259,8 @@ impl TryFrom<MetadataStream> for OnvifEvent {
             area_index,
             confidence,
             data,
+            camera_id: None,
+            stream_id: None,
         })
     }
 }
@@ -272,6 +277,18 @@ pub fn parse_raw_onvif_event(xml: &str) -> Result<MetadataStream, String> {
 pub fn parse_onvif_event(xml: &str) -> Result<OnvifEvent, String> {
     let stream = parse_raw_onvif_event(xml)?;
     OnvifEvent::try_from(stream)
+}
+
+/// Get the path for metadata file storage
+pub fn get_metadata_path() -> std::path::PathBuf {
+    // Use the recording path from config if available, otherwise use project root
+    if let Ok(config_path) = std::env::var("METADATA_DIR") {
+        std::path::PathBuf::from(config_path)
+    } else {
+        // Get the current executable path and navigate up to project root
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        current_dir.join("metadata")
+    }
 }
 
 // Convenience functions for specific event types

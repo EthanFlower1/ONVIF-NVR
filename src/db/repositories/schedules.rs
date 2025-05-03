@@ -32,11 +32,13 @@ impl SchedulesRepository {
             r#"
             INSERT INTO recording_schedules (
                 id, camera_id, stream_id, name, enabled, days_of_week, start_time, end_time,
-                created_at, updated_at, retention_days 
+                created_at, updated_at, retention_days, record_on_motion, record_on_audio,
+                record_on_analytics, record_on_external, continuous_recording
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             RETURNING id, camera_id, stream_id, name, enabled, days_of_week, start_time, end_time,
-                     created_at, updated_at, retention_days 
+                     created_at, updated_at, retention_days, record_on_motion, record_on_audio,
+                     record_on_analytics, record_on_external, continuous_recording
             "#,
         )
         .bind(schedule_db.id)
@@ -50,6 +52,11 @@ impl SchedulesRepository {
         .bind(schedule_db.created_at)
         .bind(schedule_db.updated_at)
         .bind(schedule_db.retention_days)
+        .bind(schedule_db.record_on_motion)
+        .bind(schedule_db.record_on_audio)
+        .bind(schedule_db.record_on_analytics)
+        .bind(schedule_db.record_on_external)
+        .bind(schedule_db.continuous_recording)
         .fetch_one(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to create recording schedule: {}", e)))?;
@@ -63,7 +70,8 @@ impl SchedulesRepository {
         let result = sqlx::query_as::<_, RecordingScheduleDb>(
             r#"
             SELECT id, camera_id, stream_id, name, enabled, days_of_week, start_time, end_time,
-                   created_at, updated_at, retention_days 
+                   created_at, updated_at, retention_days, record_on_motion, record_on_audio,
+                   record_on_analytics, record_on_external, continuous_recording
             FROM recording_schedules
             WHERE id = $1
             "#,
@@ -82,7 +90,8 @@ impl SchedulesRepository {
         let result = sqlx::query_as::<_, RecordingScheduleDb>(
             r#"
             SELECT id, camera_id, stream_id, name, enabled, days_of_week, start_time, end_time,
-                   created_at, updated_at, retention_days 
+                   created_at, updated_at, retention_days, record_on_motion, record_on_audio,
+                   record_on_analytics, record_on_external, continuous_recording
             FROM recording_schedules
             WHERE camera_id = $1
             ORDER BY name
@@ -116,7 +125,8 @@ impl SchedulesRepository {
         let result = sqlx::query_as::<_, RecordingScheduleDb>(
             r#"
             SELECT id, camera_id, stream_id, name, enabled, days_of_week, start_time, end_time,
-                   created_at, updated_at, retention_days 
+                   created_at, updated_at, retention_days, record_on_motion, record_on_audio,
+                   record_on_analytics, record_on_external, continuous_recording
             FROM recording_schedules
             WHERE enabled = true
             AND $1 = ANY(days_of_week)
@@ -143,11 +153,13 @@ impl SchedulesRepository {
             r#"
             UPDATE recording_schedules
             SET camera_id = $1, stream_id = $2, name = $3, enabled = $4, days_of_week = $5,
-                start_time = $6, end_time = $7, updated_at = $8,
-                retention_days = $9
-            WHERE id = $11
+                start_time = $6, end_time = $7, updated_at = $8, retention_days = $9,
+                record_on_motion = $10, record_on_audio = $11, record_on_analytics = $12,
+                record_on_external = $13, continuous_recording = $14
+            WHERE id = $15
             RETURNING id, camera_id, stream_id, name, enabled, days_of_week, start_time, end_time,
-                     created_at, updated_at, retention_days
+                     created_at, updated_at, retention_days, record_on_motion, record_on_audio,
+                     record_on_analytics, record_on_external, continuous_recording
             "#,
         )
         .bind(schedule_db.camera_id)
@@ -159,6 +171,11 @@ impl SchedulesRepository {
         .bind(&schedule_db.end_time)
         .bind(Utc::now())
         .bind(schedule_db.retention_days)
+        .bind(schedule_db.record_on_motion)
+        .bind(schedule_db.record_on_audio)
+        .bind(schedule_db.record_on_analytics)
+        .bind(schedule_db.record_on_external)
+        .bind(schedule_db.continuous_recording)
         .bind(schedule_db.id)
         .fetch_one(&*self.pool)
         .await
@@ -189,7 +206,8 @@ impl SchedulesRepository {
         let result = sqlx::query_as::<_, RecordingScheduleDb>(
             r#"
             SELECT id, camera_id, stream_id, name, enabled, days_of_week, start_time, end_time,
-                   created_at, updated_at, retention_days
+                   created_at, updated_at, retention_days, record_on_motion, record_on_audio,
+                   record_on_analytics, record_on_external, continuous_recording
             FROM recording_schedules
             ORDER BY name
             "#,
@@ -228,7 +246,8 @@ impl SchedulesRepository {
         let result = sqlx::query_as::<_, RecordingScheduleDb>(
             r#"
             SELECT id, camera_id, stream_id, name, enabled, days_of_week, start_time, end_time,
-                   created_at, updated_at, retention_days 
+                   created_at, updated_at, retention_days, record_on_motion, record_on_audio,
+                   record_on_analytics, record_on_external, continuous_recording
             FROM recording_schedules
             WHERE enabled = true
             ORDER BY name

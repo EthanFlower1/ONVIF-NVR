@@ -1233,6 +1233,11 @@ async fn create_schedule(
         created_at: now,
         updated_at: now,
         retention_days: req.retention_days,
+        record_on_motion: false,       // Default to false for event-based recording
+        record_on_audio: false,        // Default to false for event-based recording
+        record_on_analytics: false,    // Default to false for event-based recording
+        record_on_external: false,     // Default to false for event-based recording
+        continuous_recording: true,    // Default to true for continuous recording
     };
 
     // Create schedule in repository

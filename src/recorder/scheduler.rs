@@ -92,27 +92,59 @@ impl RecordingScheduler {
                 continue;
             }
 
-            // Start new recording
-            match self
-                .recording_manager
-                .start_recording(schedule, &stream)
-                .await
-            {
-                Ok(recording_id) => {
-                    info!(
-                        "Started recording {} for schedule {}",
-                        recording_id, schedule.id
-                    );
+            // Check if this is an event-based or continuous schedule
+            let is_event_based = schedule.record_on_motion || 
+                                schedule.record_on_audio || 
+                                schedule.record_on_analytics || 
+                                schedule.record_on_external;
+            
+            // If this is a continuous recording schedule or both, start it now
+            if schedule.continuous_recording {
+                match self
+                    .recording_manager
+                    .start_recording(schedule, &stream)
+                    .await
+                {
+                    Ok(recording_id) => {
+                        info!(
+                            "Started continuous recording {} for schedule {}",
+                            recording_id, schedule.id
+                        );
 
-                    // Mark as should be recording
-                    should_be_recording.insert(format!("{}-{}", schedule.id, stream.id), true);
+                        // Mark as should be recording
+                        should_be_recording.insert(format!("{}-{}", schedule.id, stream.id), true);
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to start recording for schedule {}: {}",
+                            schedule.id, e
+                        );
+                    }
                 }
-                Err(e) => {
-                    error!(
-                        "Failed to start recording for schedule {}: {}",
-                        schedule.id, e
-                    );
+            } else if is_event_based {
+                // For event-based schedules, set up the event triggers
+                if schedule.record_on_motion {
+                    info!("Setting up motion-triggered recording for schedule {}", schedule.id);
+                    // We don't actually start recording yet - it starts when motion is detected
                 }
+                
+                if schedule.record_on_audio {
+                    info!("Setting up audio-triggered recording for schedule {}", schedule.id);
+                    // We don't actually start recording yet - it starts when audio is detected
+                }
+                
+                if schedule.record_on_analytics {
+                    info!("Setting up analytics-triggered recording for schedule {}", schedule.id);
+                    // We don't actually start recording yet - it starts when an analytics event is detected
+                }
+                
+                if schedule.record_on_external {
+                    info!("Setting up external-triggered recording for schedule {}", schedule.id);
+                    // We don't actually start recording yet - it starts when an external event is detected
+                }
+                
+                // This schedule is "active" even though it may not be recording yet
+                should_be_recording.insert(format!("{}-{}", schedule.id, stream.id), true);
             }
         }
 
@@ -133,7 +165,16 @@ impl RecordingScheduler {
                 .is_recording_active(&schedule.id, &schedule.stream_id)
                 .await
             {
-                // Stop recording
+                // Check if there are active events for this stream that require continued recording
+                if self.recording_manager.has_active_events(&schedule.stream_id).await {
+                    info!(
+                        "Not stopping recording for schedule {} due to active events",
+                        schedule.id
+                    );
+                    continue;
+                }
+                
+                // No active events, safe to stop recording
                 match self
                     .recording_manager
                     .stop_recording(&schedule.id, &schedule.stream_id)

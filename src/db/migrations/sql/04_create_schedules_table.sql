@@ -13,3 +13,10 @@ CREATE TABLE IF NOT EXISTS recording_schedules (
     retention_days INTEGER NOT NULL DEFAULT 30
 );
 
+-- Add event-based fields to recording_schedules table
+ALTER TABLE recording_schedules 
+ADD COLUMN IF NOT EXISTS record_on_motion BOOLEAN NOT NULL DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS record_on_audio BOOLEAN NOT NULL DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS record_on_analytics BOOLEAN NOT NULL DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS record_on_external BOOLEAN NOT NULL DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS continuous_recording BOOLEAN NOT NULL DEFAULT TRUE;

@@ -243,7 +243,15 @@ impl Default for Config {
                 db_pool: None,
             },
             recording: RecordingConfig {
-                storage_path: PathBuf::from(std::fs::canonicalize("./recordings").unwrap()),
+                storage_path: {
+                    let recordings_dir = PathBuf::from("./recordings");
+                    // Create the directory if it doesn't exist
+                    if !recordings_dir.exists() {
+                        let _ = std::fs::create_dir_all(&recordings_dir);
+                    }
+                    // Use absolute path if possible, otherwise use relative
+                    std::fs::canonicalize(&recordings_dir).unwrap_or(recordings_dir)
+                },
                 max_storage_gb: 500,
                 segment_duration: 30,      // 5 minutes
                 format: "mp4".to_string(), // Change default to MP4 format

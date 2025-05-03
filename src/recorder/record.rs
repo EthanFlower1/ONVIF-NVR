@@ -8,7 +8,7 @@ use crate::messaging::broker::MessageBrokerTrait;
 use crate::stream_manager::StreamManager;
 use crate::utils::metadataparser::parse_onvif_event;
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Datelike};
 // use cocoa::appkit::NSEventType::NSCursorUpdate;
 use gstreamer as gst;
 use gstreamer::glib;
@@ -26,14 +26,17 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub struct RecordingManager {
     stream_manager: Arc<StreamManager>,
     recordings_repo: RecordingsRepository,
-    active_recordings: Mutex<HashMap<String, ActiveRecording>>,
+    active_recordings: Arc<Mutex<HashMap<String, ActiveRecording>>>,
     recording_base_path: PathBuf,
     segment_duration: i64,
     format: String,
     message_broker: Arc<Mutex<Option<Arc<crate::messaging::MessageBroker>>>>,
+    // Track active events requiring recording to continue
+    active_events: Arc<Mutex<HashMap<String, chrono::DateTime<Utc>>>>,
 }
 
 /// Represents an active recording session
@@ -90,11 +93,12 @@ impl RecordingManager {
         Self {
             stream_manager,
             recordings_repo: RecordingsRepository::new(db_pool),
-            active_recordings: Mutex::new(HashMap::new()),
+            active_recordings: Arc::new(Mutex::new(HashMap::new())),
             recording_base_path: recording_base_path.to_owned(),
             segment_duration,
             format: format.to_owned(),
             message_broker: Arc::new(Mutex::new(None)),
+            active_events: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -210,10 +214,20 @@ impl RecordingManager {
             ),
             Err(e) => eprintln!("Failed to log metadata: {}", e),
         }
-        // Create directory structure with date-based hierarchy
-        let date_path = now.format("%Y/%m/%d/%H").to_string();
-        let camera_path = format!("{}", stream.name);
-        let mut dir_path = self.recording_base_path.join(&camera_path).join(&date_path);
+        // Create directory structure with camera_id/stream_name/year/month/day
+        let year = now.format("%Y").to_string();
+        let month = now.format("%m").to_string();
+        let day = now.format("%d").to_string();
+        let camera_id = stream.camera_id.to_string();
+        let stream_name = stream.name.clone();
+        
+        // Build path in format: {camera_id}/{stream_name}/{year}/{month}/{day}/
+        let mut dir_path = self.recording_base_path
+            .join(&camera_id)
+            .join(&stream_name)
+            .join(&year)
+            .join(&month)
+            .join(&day);
 
         // Create parent directories with better error handling
         // info!("Creating recording directory structure: {:?}", dir_path);
@@ -243,7 +257,7 @@ impl RecordingManager {
 
         // Create filename with timestamp
         let timestamp = now.format("%Y%m%d_%H%M%S").to_string();
-        let file_name = format!("cam{}_{}.{}", stream.name, timestamp, self.format);
+        let file_name = format!("{}.{}", timestamp, self.format);
         let file_path = dir_path.join(&file_name);
 
         info!("Using recording file path: {:?}", file_path);
@@ -1180,8 +1194,7 @@ impl RecordingManager {
                             }
                         }
                     }
-                    // Other operation types can be added here
-                    _ => {}
+                    // Only one operation type defined so far
                 }
             }
         });
@@ -1749,6 +1762,136 @@ impl RecordingManager {
             .values()
             .any(|r| &r.stream_id == stream_id)
     }
+    
+    /// Register an event that requires recording
+    pub async fn register_event(&self, stream_id: &Uuid, event_type: RecordingEventType) -> Result<()> {
+        let stream_key = stream_id.to_string();
+        let now = Utc::now();
+        
+        // Update the event time in the active events map
+        {
+            let mut active_events = self.active_events.lock().await;
+            active_events.insert(format!("{}-{}", stream_key, event_type.to_string()), now);
+        }
+        
+        // Check if we're already recording this stream
+        if self.is_stream_recording(stream_id).await {
+            // Already recording, no need to start a new recording
+            info!("Event received but already recording stream {}", stream_id);
+            return Ok(());
+        }
+        
+        // Get the stream info from the database
+        let stream = match sqlx::query_as::<_, crate::db::models::stream_models::Stream>(
+            "SELECT * FROM streams WHERE id = $1",
+        )
+        .bind(stream_id)
+        .fetch_optional(&*self.recordings_repo.pool)
+        .await? {
+            Some(s) => s,
+            None => {
+                return Err(anyhow!("Stream not found: {}", stream_id));
+            }
+        };
+        
+        // Check for any active schedules that allow recording this event type
+        let schedules = self.get_event_schedules(stream_id, &event_type).await?;
+        
+        if !schedules.is_empty() {
+            // Use the first matching schedule to start recording
+            let schedule = &schedules[0];
+            info!("Starting event recording for stream {} using schedule {}", stream_id, schedule.id);
+            
+            let recording_id = self.start_recording(schedule, &stream).await?;
+            info!("Started scheduled event recording {} for event type {}", recording_id, event_type.to_string());
+        } else {
+            // No matching schedule, start a standalone event recording
+            let recording_id = self.start_event_recording(&stream, event_type).await?;
+            info!("Started standalone event recording {} for event type {}", recording_id, event_type.to_string());
+        }
+        
+        Ok(())
+    }
+    
+    /// Get schedules that match this event type and are currently active
+    async fn get_event_schedules(&self, stream_id: &Uuid, event_type: &RecordingEventType) -> Result<Vec<RecordingSchedule>> {
+        // Get the current time
+        let now = Utc::now();
+        let day_of_week = now.weekday().num_days_from_sunday() as i32;
+        let current_time = now.format("%H:%M").to_string();
+        
+        // Query for schedules that are active now and support this event type
+        let event_field = match event_type {
+            RecordingEventType::Motion => "record_on_motion",
+            RecordingEventType::Audio => "record_on_audio",
+            RecordingEventType::Analytics => "record_on_analytics",
+            RecordingEventType::External => "record_on_external",
+            _ => return Ok(Vec::new()), // Continuous and Manual aren't event types
+        };
+        
+        let query = format!(
+            r#"
+            SELECT id, camera_id, stream_id, name, enabled, days_of_week, start_time, end_time,
+                   created_at, updated_at, retention_days, record_on_motion, record_on_audio,
+                   record_on_analytics, record_on_external, continuous_recording
+            FROM recording_schedules
+            WHERE enabled = true
+            AND stream_id = $1
+            AND {} = true
+            AND $2 = ANY(days_of_week)
+            AND start_time <= $3
+            AND end_time >= $3
+            "#,
+            event_field
+        );
+        
+        let schedules = sqlx::query_as::<_, crate::db::models::recording_schedule_models::RecordingScheduleDb>(&query)
+            .bind(stream_id)
+            .bind(day_of_week)
+            .bind(current_time)
+            .fetch_all(&*self.recordings_repo.pool)
+            .await?
+            .into_iter()
+            .map(crate::db::models::recording_schedule_models::RecordingSchedule::from)
+            .collect();
+        
+        Ok(schedules)
+    }
+    
+    /// Mark an event as completed
+    pub async fn event_completed(&self, stream_id: &Uuid, event_type: RecordingEventType) -> Result<()> {
+        let stream_key = stream_id.to_string();
+        let now = Utc::now();
+        
+        // Update the event time in the active events map with expiration time (now + 5 seconds)
+        let expiration_time = now + chrono::Duration::seconds(5);
+        {
+            let mut active_events = self.active_events.lock().await;
+            active_events.insert(format!("{}-{}", stream_key, event_type.to_string()), expiration_time);
+        }
+        
+        info!("Event {} completed for stream {}, recording will continue for 5 more seconds", 
+              event_type.to_string(), stream_id);
+        
+        Ok(())
+    }
+    
+    /// Check if there are active events requiring recording for this stream
+    pub async fn has_active_events(&self, stream_id: &Uuid) -> bool {
+        let stream_key = stream_id.to_string();
+        let now = Utc::now();
+        
+        let active_events = self.active_events.lock().await;
+        
+        // Check if there's any unexpired event for this stream
+        for (key, expiration_time) in active_events.iter() {
+            if key.starts_with(&format!("{}-", stream_key)) && expiration_time > &now {
+                return true;
+            }
+        }
+        
+        false
+    }
     /// Get status of all active recordings
     pub async fn get_recording_status(&self) -> Vec<RecordingStatus> {
         let active_recordings = self.active_recordings.lock().await;
@@ -1872,6 +2015,10 @@ impl RecordingManager {
         let appsink = sink.dynamic_cast::<AppSink>().unwrap();
 
         // Import the necessary types for metadata processing
+        // Create clones of necessary data that will be moved into the callback
+        let recording_manager = self.clone();
+        let stream_id_clone = stream_id.to_string();
+
         appsink.set_callbacks(
             AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
@@ -1906,41 +2053,115 @@ impl RecordingManager {
                     match std::str::from_utf8(&map) {
                         Ok(metadata_str) => {
                             info!("Received metadata: {}", metadata_str);
-                            // let mut file = File::create("onvif-metadata.xml").map_err(|e| {
-                            //     println!("Error creating file for onvif-metadata");
-                            //     gstreamer::FlowError::Error // Replace with appropriate conversion
-                            // })?;
-                            //
-                            // // Write some bytes to the file
-                            // let mut buf_writer = BufWriter::new(file);
-                            // buf_writer.write_all(
-                            //     b"Buffered write is more efficient for multiple writes",
-                            // )?;
-                            // buf_writer.flush()?; // Ensure all data is written
-                            //
-                            // Example 2: Appending to a file
+                            
+                            // Write metadata to file in a proper location
+                            let metadata_dir = crate::utils::metadataparser::get_metadata_path();
+                            std::fs::create_dir_all(&metadata_dir).map_err(|_e| {
+                                println!("Error creating metadata directory");
+                                gstreamer::FlowError::Error
+                            })?;
+                            
+                            let metadata_file = metadata_dir.join(format!("{}-metadata.xml", stream_id_clone));
                             let file = OpenOptions::new()
                                 .write(true)
                                 .append(true)
                                 .create(true)
-                                .open("onvif-metadata.xml")
-                                .map_err(|_e| {
-                                    println!("Error creating file for onvif-metadata");
-                                    gstreamer::FlowError::Error // Replace with appropriate conversion
+                                .open(metadata_file)
+                                .map_err(|e| {
+                                    println!("Error creating file for onvif-metadata: {}", e);
+                                    gstreamer::FlowError::Error
                                 })?;
                             let mut buf_writer = BufWriter::new(file);
 
                             buf_writer.write_all(&map).map_err(|_e| {
                                 println!("Error creating file for onvif-metadata");
-                                gstreamer::FlowError::Error // Replace with appropriate conversion
+                                gstreamer::FlowError::Error
                             })?;
 
-                            let metadata = parse_onvif_event(metadata_str).unwrap();
-                            println!(
-                                "Parsed Event: {:#?}, active: {:#?}",
-                                metadata.event_type,
-                                metadata.is_active.unwrap()
-                            );
+                            // Parse the ONVIF event metadata
+                            match parse_onvif_event(metadata_str) {
+                                Ok(metadata) => {
+                                    println!(
+                                        "Parsed Event: {:#?}, active: {:#?}",
+                                        metadata.event_type,
+                                        metadata.is_active.unwrap_or(false)
+                                    );
+                                    
+                                    // Handle specific event types from camera
+                                    if let Some(is_active) = metadata.is_active {
+                                        if let Some(_camera_id) = metadata.camera_id.clone() {
+                                            if let Some(stream_id) = metadata.stream_id.clone() {
+                                                let stream_uuid = uuid::Uuid::parse_str(&stream_id).unwrap_or_default();
+                                                let recording_manager_clone = recording_manager.clone();
+                                                
+                                                // Handle motion events
+                                                if matches!(metadata.event_type, crate::utils::metadataparser::EventType::MotionDetected) {
+                                                    if is_active {
+                                                        // Motion started
+                                                        tokio::spawn(async move {
+                                                            if let Err(e) = recording_manager_clone.register_event(&stream_uuid, RecordingEventType::Motion).await {
+                                                                eprintln!("Failed to register motion event: {}", e);
+                                                            }
+                                                        });
+                                                    } else {
+                                                        // Motion ended
+                                                        tokio::spawn(async move {
+                                                            if let Err(e) = recording_manager_clone.event_completed(&stream_uuid, RecordingEventType::Motion).await {
+                                                                eprintln!("Failed to complete motion event: {}", e);
+                                                            }
+                                                        });
+                                                    }
+                                                } 
+                                                // Handle audio events
+                                                else if matches!(metadata.event_type, crate::utils::metadataparser::EventType::AudioDetected) {
+                                                    let recording_manager_clone = recording_manager.clone();
+                                                    if is_active {
+                                                        // Audio started
+                                                        tokio::spawn(async move {
+                                                            if let Err(e) = recording_manager_clone.register_event(&stream_uuid, RecordingEventType::Audio).await {
+                                                                eprintln!("Failed to register audio event: {}", e);
+                                                            }
+                                                        });
+                                                    } else {
+                                                        // Audio ended
+                                                        tokio::spawn(async move {
+                                                            if let Err(e) = recording_manager_clone.event_completed(&stream_uuid, RecordingEventType::Audio).await {
+                                                                eprintln!("Failed to complete audio event: {}", e);
+                                                            }
+                                                        });
+                                                    }
+                                                } 
+                                                // Handle analytics events
+                                                else if matches!(metadata.event_type, 
+                                                     crate::utils::metadataparser::EventType::LineDetected |
+                                                     crate::utils::metadataparser::EventType::FieldDetected |
+                                                     crate::utils::metadataparser::EventType::FaceDetected |
+                                                     crate::utils::metadataparser::EventType::ObjectDetected) {
+                                                    let recording_manager_clone = recording_manager.clone();
+                                                    if is_active {
+                                                        // Analytics event started
+                                                        tokio::spawn(async move {
+                                                            if let Err(e) = recording_manager_clone.register_event(&stream_uuid, RecordingEventType::Analytics).await {
+                                                                eprintln!("Failed to register analytics event: {}", e);
+                                                            }
+                                                        });
+                                                    } else {
+                                                        // Analytics event ended
+                                                        tokio::spawn(async move {
+                                                            if let Err(e) = recording_manager_clone.event_completed(&stream_uuid, RecordingEventType::Analytics).await {
+                                                                eprintln!("Failed to complete analytics event: {}", e);
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                Err(e) => {
+                                    println!("Failed to parse ONVIF event: {}", e);
+                                }
+                            }
                         }
                         Err(_) => {
                             // If it's not UTF-8 (could be binary format like KLV)
