@@ -75,13 +75,17 @@ pub fn app_state_to_timeline_state(app_state: &AppState) -> TimelineApiState {
 }
 
 /// Create recording timeline router
-pub fn create_router<S: Clone + Send + Sync + 'static>(_state: S) -> Router<AppState> {
+pub fn create_router<S: Clone + Send + Sync + 'static>(state: S) -> Router<AppState> {
     Router::new()
         .route("/timeline", get(get_recording_timeline))
         .route("/playback/:recording_id", get(get_recording_playback_info))
         .route("/recordings_by_date", get(get_recordings_by_date))
         .route("/segments/:parent_id", get(get_recording_segments))
         .route("/video/:recording_id", get(get_video_recording))
+        // HLS playlist endpoints
+        .route("/cameras/:id/hls", get(get_hls_playlist))
+        // HLS segment endpoint
+        .route("/:id/hls", get(get_hls_segment))
 }
 
 pub async fn get_video_recording(
@@ -124,6 +128,149 @@ pub async fn get_video_recording(
             (StatusCode::OK, headers, body).into_response()
         }
         Err(_) => (StatusCode::NOT_FOUND, "Video recording not found").into_response(),
+    }
+}
+
+// Define the HlsQuery struct for query parameters
+#[derive(Deserialize, Default)]
+pub struct HlsQuery {
+    #[serde(default)]
+    playlist_type: String,
+}
+// New function for generating HLS playlists for a series of segments
+pub async fn get_hls_playlist(
+    Path(camera_id): Path<String>, // This could be camera ID or any grouping ID
+    Query(params): Query<HlsQuery>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    info!("HLS playlist request for camera: {}", camera_id);
+
+    let uuid = match Uuid::parse_str(&camera_id) {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid recording ID").into_response(),
+    };
+    // Get all recordings for this camera, ordered by timestamp
+    let recordings = match state
+        .recordings_repo
+        .get_by_camera(&uuid, Some(10000))
+        .await
+    {
+        Ok(recordings) => recordings,
+        Err(e) => {
+            error!("Error fetching recordings: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Server error").into_response();
+        }
+    };
+
+    if recordings.is_empty() {
+        return (StatusCode::NOT_FOUND, "No recordings found").into_response();
+    }
+
+    match params.playlist_type.as_str() {
+        // Master playlist
+        "master" => {
+            // Create master playlist with one quality level
+            let playlist = format!(
+                "#EXTM3U\n\
+                 #EXT-X-VERSION:3\n\
+                 #EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720\n\
+                 /api/cameras/{}/hls?playlist_type=variant\n",
+                camera_id
+            );
+
+            let headers = HeaderMap::from_iter([(
+                header::CONTENT_TYPE,
+                "application/vnd.apple.mpegurl".parse().unwrap(),
+            )]);
+
+            (StatusCode::OK, headers, playlist).into_response()
+        }
+
+        // Variant playlist
+        "variant" => {
+            // Create a variant playlist that references all segments
+            let mut playlist = String::from(
+                "#EXTM3U\n\
+                 #EXT-X-VERSION:3\n\
+                 #EXT-X-TARGETDURATION:30\n\
+                 #EXT-X-MEDIA-SEQUENCE:0\n",
+            );
+
+            // Check if there are discontinuities between segments
+            let mut previous_end_time = None;
+
+            for recording in recordings {
+                // Add discontinuity marker if there's a gap between segments
+                if let Some(prev_end) = previous_end_time {
+                    // Assuming recording has start_time field
+                    if recording.start_time > prev_end + Duration::seconds(1) {
+                        // 1 second tolerance
+                        playlist.push_str("#EXT-X-DISCONTINUITY\n");
+                    }
+                }
+
+                // Add segment to playlist
+                playlist.push_str(&format!(
+                    "#EXTINF:30.0,\n\
+                     /api/recordings/{}/hls?playlist_type=segment\n",
+                    recording.id
+                ));
+
+                previous_end_time = Some(recording.start_time + Duration::seconds(30));
+                // Assuming 30s segments
+            }
+
+            playlist.push_str("#EXT-X-ENDLIST\n");
+
+            let headers = HeaderMap::from_iter([(
+                header::CONTENT_TYPE,
+                "application/vnd.apple.mpegurl".parse().unwrap(),
+            )]);
+
+            (StatusCode::OK, headers, playlist).into_response()
+        }
+
+        _ => (StatusCode::BAD_REQUEST, "Invalid playlist type").into_response(),
+    }
+}
+
+// Function to serve individual segments
+pub async fn get_hls_segment(
+    Path(recording_id): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    info!("HLS segment request for recording: {}", recording_id);
+
+    // Parse recording ID
+    let uuid = match Uuid::parse_str(&recording_id) {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid recording ID").into_response(),
+    };
+
+    // Get recording details
+    let recording = match state.recordings_repo.get_by_id(&uuid).await {
+        Ok(Some(recording)) => recording,
+        Ok(None) => return (StatusCode::NOT_FOUND, "Recording not found").into_response(),
+        Err(e) => {
+            error!("Error fetching recording: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Server error").into_response();
+        }
+    };
+
+    // Serve the MP4 file directly as an HLS segment
+    let path = recording.file_path;
+    match tokio::fs::File::open(&path).await {
+        Ok(file) => {
+            let stream = ReaderStream::new(file);
+            let body = StreamBody::new(stream);
+
+            // For MP4 segments, use video/mp4 content type
+            let headers =
+                HeaderMap::from_iter([(header::CONTENT_TYPE, "video/mp4".parse().unwrap())]);
+
+            (StatusCode::OK, headers, body).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "Video segment not found").into_response(),
     }
 }
 /// Get timeline data for a camera over a specific time period

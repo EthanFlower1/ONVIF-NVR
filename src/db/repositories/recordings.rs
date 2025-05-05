@@ -453,7 +453,7 @@ impl RecordingsRepository {
     }
 
     /// Get recordings for a camera
-    pub async fn _get_by_camera(
+    pub async fn get_by_camera(
         &self,
         camera_id: &Uuid,
         limit: Option<i64>,
@@ -462,8 +462,7 @@ impl RecordingsRepository {
 
         let result = sqlx::query_as::<_, RecordingDb>(
             r#"
-            SELECT id, camera_id, stream_id, schedule_id, start_time, end_time, file_path, file_size,
-                   duration, format, resolution, fps, event_type, metadata
+            SELECT *
             FROM recordings
             WHERE camera_id = $1
             ORDER BY start_time DESC
