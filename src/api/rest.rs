@@ -2,6 +2,7 @@ use crate::api::webrtc::{
     add_ice_candidate, close_webrtc_session, create_webrtc_session, process_webrtc_offer,
     WebRTCState,
 };
+use crate::api::websocket_stream;
 use crate::db::models::camera_models::CameraWithStreams;
 use crate::db::models::recording_schedule_models::RecordingSchedule;
 use crate::db::models::stream_models::{ReferenceType, Stream, StreamReference, StreamType};
@@ -39,8 +40,9 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
-// Import recording controller
+// Import recording controllers
 pub mod recording_controller;
+pub mod recording_playback_controller;
 
 // Shared application state
 #[derive(Clone)]
@@ -259,6 +261,11 @@ impl RestApi {
                 "/recording",
                 recording_controller::create_router(state.clone()),
             )
+            // Add the new recording playback controller
+            .nest(
+                "/playback",
+                recording_playback_controller::create_router(state.clone()),
+            )
             // Regular routes with AppState
             .with_state(state)
             // Add WebRTC routes with their own state
@@ -271,7 +278,8 @@ impl RestApi {
                     .route("/close/:session_id", get(close_webrtc_session))
                     .with_state(webrtc_state),
             )
-            // Add WebSocket routes separately with their own state
+            // Add WebSocket for recording playback streaming
+            .route("/ws/playback", get(websocket_stream::handle_ws_upgrade))
             // Serve static files from the public directory
             .nest_service("/", ServeDir::new("public"))
             // Apply CORS middleware to all routes

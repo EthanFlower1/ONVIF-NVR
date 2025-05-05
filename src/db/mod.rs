@@ -5,10 +5,14 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
+use once_cell::sync::OnceCell;
 
 pub mod migrations;
 pub mod models;
 pub mod repositories;
+
+// Global database pool for use throughout the application
+static DB_POOL: OnceCell<Arc<PgPool>> = OnceCell::new();
 
 /// Database service for handling connections and migrations
 pub struct DatabaseService {
@@ -30,9 +34,14 @@ impl DatabaseService {
 
         info!("Connected to PostgreSQL database");
 
-        // Create a shared instance
+        // Create a shared instance and store it in the global pool
+        let pool_arc = Arc::new(pool);
+        
+        // Initialize the global DB_POOL if it hasn't been set yet
+        let _ = DB_POOL.set(pool_arc.clone());
+
         let service = Self {
-            pool: Arc::new(pool),
+            pool: pool_arc,
             config: config.clone(),
         };
 
@@ -66,6 +75,15 @@ impl DatabaseService {
                 Ok(false)
             }
         }
+    }
+}
+
+/// Get the global database connection pool
+/// Returns an error if the pool has not been initialized
+pub async fn get_connection_pool() -> Result<PgPool> {
+    match DB_POOL.get() {
+        Some(pool) => Ok(pool.as_ref().clone()),
+        None => Err(Error::Database("Database pool not initialized".to_string()).into()),
     }
 }
 
