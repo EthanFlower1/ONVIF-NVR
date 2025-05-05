@@ -1535,6 +1535,7 @@ dependencies = [
  "metadatastream",
  "objc",
  "objc-foundation",
+ "once_cell",
  "onvif",
  "rand 0.8.5",
  "regex",
