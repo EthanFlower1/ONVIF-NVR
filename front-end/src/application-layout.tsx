@@ -147,6 +147,10 @@ export function ApplicationLayout({
                 <FilmIcon />
                 <SidebarLabel>Recordings</SidebarLabel>
               </SidebarItem>
+              <SidebarItem href="/playback" current={pathname.startsWith('/playback')}>
+                <PlayIcon />
+                <SidebarLabel>Playback</SidebarLabel>
+              </SidebarItem>
               <SidebarItem href="/recording-schedules" current={pathname.startsWith('/recording-schedules')}>
                 <CalendarIcon />
                 <SidebarLabel>Recording Schedules</SidebarLabel>

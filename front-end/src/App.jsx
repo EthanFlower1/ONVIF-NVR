@@ -9,6 +9,7 @@ import DeviceDiscovery from './pages/discovery.tsx'
 import Liveview from './pages/live-view.tsx'
 import Recordings from './pages/recordings.tsx'
 import RecordingSchedules from './pages/recording-schedules.tsx'
+import Playback from './pages/playback.tsx'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { AuthProvider } from './contexts/AuthContext'
 import './App.css'
@@ -92,6 +93,14 @@ function App() {
           element={
             <ProtectedRoute>
               <Layout><RecordingSchedules /></Layout>
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="/playback" 
+          element={
+            <ProtectedRoute>
+              <Layout><Playback /></Layout>
             </ProtectedRoute>
           } 
         />
