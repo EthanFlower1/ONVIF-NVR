@@ -443,6 +443,10 @@ export default function Recordings() {
               <Button
                 className="bg-indigo-600 hover:bg-indigo-700 text-white"
                 disabled={selectedRecording.file_size === 0}
+                onClick={() => {
+                  const url = `/playback?camera_id=${selectedRecording.camera_id}&recording_id=${selectedRecording.id}`;
+                  window.open(url, '_blank');
+                }}
               >
                 <PlayIcon className="-ml-1 mr-1 h-5 w-5" />
                 Play
