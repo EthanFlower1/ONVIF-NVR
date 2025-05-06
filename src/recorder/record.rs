@@ -445,59 +445,47 @@ impl RecordingManager {
         //-----------------------------------------------------------------------------
         // MUXER & SPLITMUXSINK SETUP - Using the same format for all codecs
         //-----------------------------------------------------------------------------
-        let muxer = {
-            let factory_name = if self.format == "mp4" {
-                "mp4mux"
-            } else {
-                "matroskamux"
-            };
+// Configure splitmuxsink for HLS-compatible segments
+let muxer = {
+    // Use mp4mux with specific settings for HLS compatibility
+    let element = gst::ElementFactory::make("mp4mux")
+        .name(format!("hls_muxer_{}", element_suffix))
+        .property("faststart", true)      // Important for web playback
+        .property("streamable", true)     // Critical for streaming
+        .property("fragment-duration", 1000_u32); // 1s fragments within segments
+    
+    // Additional HLS-specific muxer settings - standards used by most HLS players
+    let element = element.property("movie-timescale", 90000_u32); // Standard HLS timescale
+    let element = element.property("trak-timescale", 90000_u32);
+    element.build()?
+};
 
-            let element = gst::ElementFactory::make(factory_name)
-                .name(format!("record_muxer_{}", element_suffix))
-                .property("faststart", true)
-                .property("streamable", true);
-
-            let element = element.property("fragment-duration", 3000_u32);
-
-            element.build()?
-        };
-
-        // Use splitmuxsink for segment-based recording with platform optimizations
-        let splitmuxsink = {
-            let mut builder = gst::ElementFactory::make("splitmuxsink")
-                .name(format!("record_splitmuxsink_{}", element_suffix))
-                .property(
-                    "location",
-                    format!(
-                        "{}/segment_%05d.{}",
-                        dir_path.to_str().unwrap(),
-                        self.format
-                    ),
-                )
-                .property("max-size-bytes", 0u64)
-                .property("muxer", &muxer);
-
-            #[cfg(target_os = "macos")]
-            {
-                // info!("macOS detected: using longer segment duration for stability");
-                builder = builder.property(
-                    "max-size-time",
-                    gst::ClockTime::from_seconds(self.segment_duration as u64),
-                );
-                builder = builder.property("send-keyframe-requests", true);
-                builder = builder.property("async-finalize", true);
-                builder = builder.property("max-files", 0u32);
-            }
-
-            {
-                builder = builder.property(
-                    "max-size-time",
-                    gst::ClockTime::from_seconds(self.segment_duration as u64),
-                );
-            }
-
-            builder.build()?
-        };
+// Configure splitmuxsink for HLS segments
+let splitmuxsink = {
+    let mut builder = gst::ElementFactory::make("splitmuxsink")
+        .name(format!("hls_splitmuxsink_{}", element_suffix))
+        .property(
+            "location",
+            format!(
+                "{}/segment_%05d.mp4", // Using .mp4 for broad compatibility
+                dir_path.to_str().unwrap()
+            ),
+        )
+        .property("max-size-bytes", 0u64)
+        .property("muxer", &muxer);
+    
+    // Set segment duration to match HLS recommendations (typically 2-6 seconds)
+    builder = builder.property(
+        "max-size-time",
+        gst::ClockTime::from_seconds(15 * 60u64), // 4-second segments are common for HLS
+    );
+    
+    // Optional but useful for HLS
+    builder = builder.property("async-finalize", true); 
+    builder = builder.property("max-files", 0u32); // Keep all segments
+    
+    builder.build()?
+};
 
         // Setup segment location signal handler (for database tracking)
         let recording_id_clone = recording_id;

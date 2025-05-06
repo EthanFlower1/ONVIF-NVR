@@ -465,7 +465,8 @@ impl RecordingsRepository {
             SELECT *
             FROM recordings
             WHERE camera_id = $1
-            ORDER BY start_time DESC
+            AND end_time IS NOT NULL
+            ORDER BY start_time ASC
             LIMIT $2
             "#,
         )

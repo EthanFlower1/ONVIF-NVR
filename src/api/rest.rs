@@ -55,6 +55,7 @@ pub struct AppState {
     pub recordings_repo: Arc<RecordingsRepository>,
     pub schedules_repo: Arc<SchedulesRepository>,
     pub message_broker: Arc<crate::messaging::MessageBroker>,
+    pub hls_service: Option<Arc<crate::recorder::HlsPreparationService>>,
 }
 
 pub type ApiResult<T> = std::result::Result<T, ApiError>;
@@ -190,6 +191,12 @@ impl RestApi {
             300, // 5 minutes segment duration
             "mp4",
         ));
+        
+        // Create HLS preparation service
+        let hls_service = Arc::new(crate::recorder::HlsPreparationService::new(
+            Arc::clone(&self.db_pool),
+            &std::path::Path::new("./public/hls"),
+        ));
 
         let state = AppState {
             db_pool: Arc::clone(&self.db_pool),
@@ -200,6 +207,7 @@ impl RestApi {
             recordings_repo: Arc::new(RecordingsRepository::new(self.db_pool.clone())),
             schedules_repo: Arc::new(SchedulesRepository::new(self.db_pool.clone())),
             message_broker: self.message_broker.clone(),
+            hls_service: Some(Arc::clone(&hls_service)),
         };
 
         let webrtc_state = Arc::new(WebRTCState::new(
@@ -265,6 +273,11 @@ impl RestApi {
             .nest(
                 "/playback",
                 recording_playback_controller::create_router(state.clone()),
+            )
+            // Add direct API endpoints for HLS streaming
+            .route(
+                "/api/cameras/:id/hls",
+                get(recording_playback_controller::get_hls_playlist),
             )
             // Regular routes with AppState
             .with_state(state)

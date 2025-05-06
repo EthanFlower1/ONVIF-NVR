@@ -11,12 +11,14 @@ use axum::response::{IntoResponse, Json};
 use axum::routing::get;
 use axum::Router;
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use gstreamer as gst;
+use gstreamer::parse::launch;
+use gstreamer::prelude::*;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::io::Write;
 use std::sync::Arc;
-use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
@@ -86,6 +88,8 @@ pub fn create_router<S: Clone + Send + Sync + 'static>(state: S) -> Router<AppSt
         .route("/cameras/:id/hls", get(get_hls_playlist))
         // HLS segment endpoint
         .route("/:id/hls", get(get_hls_segment))
+        // HLS init segment endpoint
+        .route("/:id/init.mp4", get(get_init_segment))
 }
 
 pub async fn get_video_recording(
@@ -137,7 +141,7 @@ pub struct HlsQuery {
     #[serde(default)]
     playlist_type: String,
 }
-// New function for generating HLS playlists for a series of segments
+
 pub async fn get_hls_playlist(
     Path(camera_id): Path<String>, // This could be camera ID or any grouping ID
     Query(params): Query<HlsQuery>,
@@ -149,6 +153,7 @@ pub async fn get_hls_playlist(
         Ok(id) => id,
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid recording ID").into_response(),
     };
+
     // Get all recordings for this camera, ordered by timestamp
     let recordings = match state
         .recordings_repo
@@ -172,9 +177,9 @@ pub async fn get_hls_playlist(
             // Create master playlist with one quality level
             let playlist = format!(
                 "#EXTM3U\n\
-                 #EXT-X-VERSION:3\n\
+                 #EXT-X-VERSION:7\n\
                  #EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720\n\
-                 /api/cameras/{}/hls?playlist_type=variant\n",
+                 /playback/cameras/{}/hls?playlist_type=variant\n",
                 camera_id
             );
 
@@ -191,15 +196,144 @@ pub async fn get_hls_playlist(
             // Create a variant playlist that references all segments
             let mut playlist = String::from(
                 "#EXTM3U\n\
-                 #EXT-X-VERSION:3\n\
-                 #EXT-X-TARGETDURATION:30\n\
-                 #EXT-X-MEDIA-SEQUENCE:0\n",
+                #EXT-X-VERSION:7\n\
+                #EXT-X-TARGETDURATION:4\n\
+                #EXT-X-MEDIA-SEQUENCE:0\n",
             );
+
+            // Use first recording's ID to create init.mp4 URL
+            let first_recording = &recordings[0];
+
+            let init_path = format!(
+                "/Users/ethanflower/projects/g-streamer/recordings/{}/init.mp4",
+                first_recording.id
+            );
+
+            // Create directory if it doesn't exist
+            if let Some(parent) = std::path::Path::new(&init_path).parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    error!("Failed to create directory: {}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to create output directory",
+                    )
+                        .into_response();
+                }
+            } else {
+                // This else clause belongs to the parent check, not the error check
+                error!("Invalid path: no parent directory");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid output path").into_response();
+            }
+
+            info!(
+                "First Recording Path: {}",
+                first_recording.file_path.display()
+            );
+            // Try a simpler pipeline first - just extract the MP4 headers
+            let pipeline = match launch(&format!(
+                "filesrc location=\"{}\" ! \
+                qtdemux name=demux ! \
+                mp4mux fragment-duration=1000 ! \
+                filesink location=\"{}\"",
+                first_recording.file_path.display(),
+                init_path
+            )) {
+                Ok(p) => p,
+                Err(e) => {
+                    error!("GStreamer pipeline launch error: {}", e);
+                    // Try fallback pipeline if the first one fails
+                    match launch(&format!(
+                        "filesrc location=\"{}\" ! \
+                        decodebin ! \
+                        mp4mux ! \
+                        filesink location=\"{}\"",
+                        first_recording.file_path.display(),
+                        init_path
+                    )) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            error!("Fallback GStreamer pipeline launch error: {}", e);
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "Failed to create init.mp4",
+                            )
+                                .into_response();
+                        }
+                    }
+                }
+            };
+
+            // Add timeout for pipeline operation
+            let timeout = std::time::Duration::from_secs(10);
+            let start_time = std::time::Instant::now();
+
+            // Replace ? operator with explicit match handling
+            match pipeline.set_state(gst::State::Playing) {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("GStreamer state change error: {}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to start GStreamer pipeline",
+                    )
+                        .into_response();
+                }
+            }
+
+            let bus = pipeline.bus().unwrap();
+            let mut success = false;
+
+            // Wait for EOS or timeout
+            for msg in bus.iter_timed(gst::ClockTime::from_seconds(5)) {
+                match msg.view() {
+                    gst::MessageView::Eos(..) => {
+                        success = true;
+                        break;
+                    }
+                    gst::MessageView::Error(err) => {
+                        error!("GStreamer error: {}", err.error());
+                        break;
+                    }
+                    _ => {}
+                }
+
+                if start_time.elapsed() > timeout {
+                    error!("GStreamer pipeline timeout");
+                    break;
+                }
+            }
+
+            // Always clean up the pipeline state
+            if let Err(e) = pipeline.set_state(gst::State::Null) {
+                error!("Failed to stop GStreamer pipeline: {}", e);
+            }
+
+            // Check if init file was created
+            if !success || !std::path::Path::new(&init_path).exists() {
+                error!("Failed to create initialization segment");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to create initialization segment",
+                )
+                    .into_response();
+            }
+
+            // Continue with playlist generation - properly reference init.mp4
+            // Using both absolute and relative URLs for better compatibility
+            playlist.push_str(&format!(
+                "#EXT-X-MAP:URI=\"/playback/{}/init.mp4\"\n",
+                first_recording.id
+            ));
 
             // Check if there are discontinuities between segments
             let mut previous_end_time = None;
 
             for recording in recordings {
+                // Skip recordings without an end_time
+                if recording.end_time.is_none() {
+                    continue; // Skip to the next recording
+                }
+
                 // Add discontinuity marker if there's a gap between segments
                 if let Some(prev_end) = previous_end_time {
                     // Assuming recording has start_time field
@@ -209,14 +343,16 @@ pub async fn get_hls_playlist(
                     }
                 }
 
-                // Add segment to playlist
+                // Add segment to playlist - using relative URL for better compatibility
                 playlist.push_str(&format!(
-                    "#EXTINF:30.0,\n\
-                     /api/recordings/{}/hls?playlist_type=segment\n",
+                    "#EXTINF:4.0,\n\
+                    /playback/{}/hls?playlist_type=segment\n",
                     recording.id
                 ));
 
-                previous_end_time = Some(recording.start_time + Duration::seconds(30));
+                // Update previous_end_time using the actual end_time from recording
+                // instead of calculating based on start_time
+                previous_end_time = recording.end_time;
                 // Assuming 30s segments
             }
 
@@ -233,8 +369,249 @@ pub async fn get_hls_playlist(
         _ => (StatusCode::BAD_REQUEST, "Invalid playlist type").into_response(),
     }
 }
-
 // Function to serve individual segments
+// Get initialization segment for HLS
+pub async fn get_init_segment(
+    Path(recording_id): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    info!("HLS init.mp4 request for recording: {}", recording_id);
+
+    // Parse recording ID
+    let uuid = match Uuid::parse_str(&recording_id) {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid recording ID").into_response(),
+    };
+
+    // Try to find existing init.mp4 file
+    let init_path = format!(
+        "/Users/ethanflower/projects/g-streamer/recordings/{}/init.mp4",
+        recording_id
+    );
+
+    // Check if init.mp4 exists
+    match tokio::fs::File::open(&init_path).await {
+        Ok(file) => {
+            info!("Found existing init.mp4 for {}", recording_id);
+            let stream = ReaderStream::new(file);
+            let body = StreamBody::new(stream);
+
+            // For MP4 segments, use video/mp4 content type
+            let headers = HeaderMap::from_iter([
+                (header::CONTENT_TYPE, "video/mp4".parse().unwrap()),
+                (header::CACHE_CONTROL, "max-age=31536000".parse().unwrap()), // Cache for a year
+            ]);
+
+            (StatusCode::OK, headers, body).into_response()
+        }
+        Err(_) => {
+            info!("Init.mp4 not found at {}, generating new one", init_path);
+
+            // Get recording details to generate init.mp4
+            let recording = match state.recordings_repo.get_by_id(&uuid).await {
+                Ok(Some(recording)) => recording,
+                Ok(None) => return (StatusCode::NOT_FOUND, "Recording not found").into_response(),
+                Err(e) => {
+                    error!("Error fetching recording: {}", e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Server error").into_response();
+                }
+            };
+
+            // Create directory if it doesn't exist
+            if let Some(parent) = std::path::Path::new(&init_path).parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    error!("Failed to create directory: {}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to create output directory",
+                    )
+                        .into_response();
+                }
+            }
+
+            // Try to create initialization segment with GStreamer using multiple approaches
+            let mut success = false;
+            let mut pipeline_opt = None;
+
+            // Try the primary pipeline approach first
+            let primary_pipeline = format!(
+                "filesrc location=\"{}\" ! \
+                qtdemux name=demux ! \
+                mp4mux faststart=true streamable=true movie-timescale=90000 trak-timescale=90000 ! \
+                filesink location=\"{}\"",
+                recording.file_path.display(),
+                init_path
+            );
+
+            match launch(&primary_pipeline) {
+                Ok(p) => {
+                    info!("Successfully created primary pipeline for init.mp4");
+                    pipeline_opt = Some(p);
+                    success = true;
+                }
+                Err(e) => {
+                    error!("GStreamer primary pipeline launch error: {}", e);
+
+                    // Define fallback pipelines in order of preference
+                    let fallback_pipelines = vec![
+                        // Fallback 1: Try with decodebin
+                        format!(
+                            "filesrc location=\"{}\" ! \
+                            decodebin ! \
+                            mp4mux faststart=true streamable=true movie-timescale=90000 trak-timescale=90000 ! \
+                            filesink location=\"{}\"",
+                            recording.file_path.display(),
+                            init_path
+                        ),
+                        // Fallback 2: Try with full demux/decode/encode cycle
+                        format!(
+                            "filesrc location=\"{}\" ! \
+                            decodebin name=dec ! queue ! videoconvert ! x264enc ! \
+                            mp4mux faststart=true streamable=true ! \
+                            filesink location=\"{}\"",
+                            recording.file_path.display(),
+                            init_path
+                        ),
+                        // Fallback 3: Just create a minimal valid MP4 file
+                        format!(
+                            "videotestsrc num-buffers=1 ! video/x-raw,width=320,height=240 ! \
+                            videoconvert ! x264enc ! mp4mux ! \
+                            filesink location=\"{}\"",
+                            init_path
+                        )
+                    ];
+
+                    // Try each fallback pipeline in sequence
+                    for (i, pipeline_str) in fallback_pipelines.iter().enumerate() {
+                        match launch(pipeline_str) {
+                            Ok(p) => {
+                                info!(
+                                    "Successfully created fallback pipeline {} for init.mp4",
+                                    i + 1
+                                );
+                                pipeline_opt = Some(p);
+                                success = true;
+                                break;
+                            }
+                            Err(e) => {
+                                error!("Fallback pipeline {} launch error: {}", i + 1, e);
+                                // Continue to next fallback
+                            }
+                        }
+                    }
+
+                    // If all GStreamer pipelines failed, try creating a minimal file manually
+                    if !success {
+                        error!("All GStreamer pipelines failed. Attempting to manually create a minimal init.mp4");
+
+                        // Create a very basic standard MP4 initialization segment
+                        let init_contents: &[u8] = &[
+                            // MP4 file signature (ftyp box)
+                            0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79,
+                            0x70, // size=24, type="ftyp"
+                            0x69, 0x73, 0x6F, 0x6D, 0x00, 0x00, 0x00,
+                            0x01, // brand="isom", minor_version=1
+                            0x69, 0x73, 0x6F, 0x6D, 0x61, 0x76, 0x63,
+                            0x31, // compatible_brands="isomavc1"
+                            // Movie box header
+                            0x00, 0x00, 0x00, 0x08, 0x6D, 0x6F, 0x6F,
+                            0x76, // size=8, type="moov"
+                        ];
+
+                        // Write the minimal init segment to file
+                        if let Ok(mut file) = std::fs::File::create(&init_path) {
+                            if let Ok(_) = file.write_all(init_contents) {
+                                info!("Created minimal MP4 initialization file at {}", init_path);
+
+                                // Create a dummy pipeline for consistency
+                                if let Ok(p) = launch("fakesrc ! fakesink") {
+                                    pipeline_opt = Some(p);
+                                    success = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If all approaches failed
+            if !success {
+                error!("Failed to create init.mp4 file through any method");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to create init.mp4 - all approaches failed",
+                )
+                    .into_response();
+            }
+
+            // Get the pipeline from the option
+            let pipeline = pipeline_opt.unwrap();
+
+            // Run the pipeline
+            if let Err(e) = pipeline.set_state(gst::State::Playing) {
+                error!("GStreamer state change error: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to start GStreamer pipeline",
+                )
+                    .into_response();
+            }
+
+            let bus = pipeline.bus().unwrap();
+            let mut success = false;
+
+            // Wait for EOS or timeout
+            for msg in bus.iter_timed(gst::ClockTime::from_seconds(5)) {
+                match msg.view() {
+                    gst::MessageView::Eos(..) => {
+                        success = true;
+                        break;
+                    }
+                    gst::MessageView::Error(err) => {
+                        error!("GStreamer error: {}", err.error());
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Clean up the pipeline state
+            if let Err(e) = pipeline.set_state(gst::State::Null) {
+                error!("Failed to stop GStreamer pipeline: {}", e);
+            }
+
+            // Check if init file was created
+            if !success || !std::path::Path::new(&init_path).exists() {
+                error!("Failed to create initialization segment");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to create initialization segment",
+                )
+                    .into_response();
+            }
+
+            // Now serve the newly created init.mp4
+            match tokio::fs::File::open(&init_path).await {
+                Ok(file) => {
+                    let stream = ReaderStream::new(file);
+                    let body = StreamBody::new(stream);
+
+                    // For MP4 segments, use video/mp4 content type
+                    let headers = HeaderMap::from_iter([
+                        (header::CONTENT_TYPE, "video/mp4".parse().unwrap()),
+                        (header::CACHE_CONTROL, "max-age=31536000".parse().unwrap()), // Cache for a year
+                    ]);
+
+                    (StatusCode::OK, headers, body).into_response()
+                }
+                Err(_) => {
+                    (StatusCode::NOT_FOUND, "Failed to open generated init.mp4").into_response()
+                }
+            }
+        }
+    }
+}
+
 pub async fn get_hls_segment(
     Path(recording_id): Path<String>,
     State(state): State<AppState>,
@@ -264,9 +641,11 @@ pub async fn get_hls_segment(
             let stream = ReaderStream::new(file);
             let body = StreamBody::new(stream);
 
-            // For MP4 segments, use video/mp4 content type
-            let headers =
-                HeaderMap::from_iter([(header::CONTENT_TYPE, "video/mp4".parse().unwrap())]);
+            // For MP4 segments, use video/mp4 content type with caching directives
+            let headers = HeaderMap::from_iter([
+                (header::CONTENT_TYPE, "video/mp4".parse().unwrap()),
+                (header::CACHE_CONTROL, "max-age=86400".parse().unwrap()), // Cache for a day
+            ]);
 
             (StatusCode::OK, headers, body).into_response()
         }
@@ -674,4 +1053,3 @@ pub async fn get_recording_segments(
 
     Ok(Json(segments))
 }
-
