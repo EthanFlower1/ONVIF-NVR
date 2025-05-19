@@ -41,6 +41,8 @@ use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 // Import recording controllers
+pub mod hls_controller;
+pub mod nginx_vod_mapping;
 pub mod recording_controller;
 pub mod recording_playback_controller;
 
@@ -191,7 +193,7 @@ impl RestApi {
             300, // 5 minutes segment duration
             "mp4",
         ));
-        
+
         // Create HLS preparation service
         let hls_service = Arc::new(crate::recorder::HlsPreparationService::new(
             Arc::clone(&self.db_pool),
@@ -209,6 +211,10 @@ impl RestApi {
             message_broker: self.message_broker.clone(),
             hls_service: Some(Arc::clone(&hls_service)),
         };
+
+        // Create HLS controller state
+        let hls_controller_state =
+            crate::api::rest::hls_controller::HlsControllerState::new(state.clone());
 
         let webrtc_state = Arc::new(WebRTCState::new(
             Arc::clone(&self.db_pool),
@@ -279,6 +285,24 @@ impl RestApi {
                 "/api/cameras/:id/hls",
                 get(recording_playback_controller::get_hls_playlist),
             )
+            // Add HLS controller routes for on-the-fly segment generation
+            .route(
+                "/hls/:recording_id/playlist",
+                get(hls_controller::get_playlist).with_state(hls_controller_state.clone()),
+            )
+            .route(
+                "/hls/:recording_id/segment",
+                get(hls_controller::get_segment).with_state(hls_controller_state.clone()),
+            )
+            .route(
+                "/hls/:recording_id/init",
+                get(hls_controller::get_init_segment).with_state(hls_controller_state),
+            )
+            // Add NGINX VOD mapping API
+            .route(
+                "/api/vod/mapping",
+                get(nginx_vod_mapping::generate_vod_mapping),
+            )
             // Regular routes with AppState
             .with_state(state)
             // Add WebRTC routes with their own state
@@ -341,7 +365,7 @@ async fn camera_connect(
     State(state): State<AppState>,
     Json(req): Json<CameraConnectRequest>,
 ) -> ApiResult<Json<CameraWithStreams>> {
-    info!("Connection to Camera");
+    info!("Connecting to Camera");
     let mut camera = Camera::default();
     camera.username = Some(req.username.clone());
     camera.password = Some(req.password.clone());
@@ -351,7 +375,7 @@ async fn camera_connect(
         .credentials(&req.username, &req.password)
         .service_path("onvif/device_service")
         .fix_time(true)
-        .auth_type("digest")
+        .auth_type("simple")
         .build()
         .await?;
 
@@ -1254,11 +1278,11 @@ async fn create_schedule(
         created_at: now,
         updated_at: now,
         retention_days: req.retention_days,
-        record_on_motion: false,       // Default to false for event-based recording
-        record_on_audio: false,        // Default to false for event-based recording
-        record_on_analytics: false,    // Default to false for event-based recording
-        record_on_external: false,     // Default to false for event-based recording
-        continuous_recording: true,    // Default to true for continuous recording
+        record_on_motion: false, // Default to false for event-based recording
+        record_on_audio: false,  // Default to false for event-based recording
+        record_on_analytics: false, // Default to false for event-based recording
+        record_on_external: false, // Default to false for event-based recording
+        continuous_recording: true, // Default to true for continuous recording
     };
 
     // Create schedule in repository
@@ -1410,4 +1434,3 @@ async fn set_schedule_enabled(
 
     Ok(Json(()))
 }
-

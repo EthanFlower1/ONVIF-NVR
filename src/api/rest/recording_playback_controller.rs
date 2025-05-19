@@ -80,7 +80,7 @@ pub fn app_state_to_timeline_state(app_state: &AppState) -> TimelineApiState {
 pub fn create_router<S: Clone + Send + Sync + 'static>(state: S) -> Router<AppState> {
     Router::new()
         .route("/timeline", get(get_recording_timeline))
-        .route("/playback/:recording_id", get(get_recording_playback_info))
+        .route("/:recording_id", get(get_recording_playback_info))
         .route("/recordings_by_date", get(get_recordings_by_date))
         .route("/segments/:parent_id", get(get_recording_segments))
         .route("/video/:recording_id", get(get_video_recording))
@@ -204,10 +204,9 @@ pub async fn get_hls_playlist(
             // Use first recording's ID to create init.mp4 URL
             let first_recording = &recordings[0];
 
-            let init_path = format!(
-                "/Users/ethanflower/projects/g-streamer/recordings/{}/init.mp4",
-                first_recording.id
-            );
+            let recordings_base =
+                std::env::var("RECORDINGS_PATH").unwrap_or_else(|_| "/app/recordings".to_string());
+            let init_path = format!("{}/{}/init.mp4", recordings_base, first_recording.id);
 
             // Create directory if it doesn't exist
             if let Some(parent) = std::path::Path::new(&init_path).parent() {
@@ -384,10 +383,9 @@ pub async fn get_init_segment(
     };
 
     // Try to find existing init.mp4 file
-    let init_path = format!(
-        "/Users/ethanflower/projects/g-streamer/recordings/{}/init.mp4",
-        recording_id
-    );
+    let recordings_base =
+        std::env::var("RECORDINGS_PATH").unwrap_or_else(|_| "/app/recordings".to_string());
+    let init_path = format!("{}/{}/init.mp4", recordings_base, recording_id);
 
     // Check if init.mp4 exists
     match tokio::fs::File::open(&init_path).await {

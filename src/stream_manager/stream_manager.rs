@@ -106,7 +106,7 @@ impl StreamManager {
         // 3) Create and add the RTSP source
         let rtspsrc = gst::ElementFactory::make("rtspsrc")
             .property("location", &source.uri)
-            .property("latency", &200u32)
+            .property("latency", &2000u32)
             .property("onvif-mode", &true)
             .build()?;
         pipeline.add(&rtspsrc)?;

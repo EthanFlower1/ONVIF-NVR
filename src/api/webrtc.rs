@@ -134,8 +134,8 @@ pub async fn process_webrtc_offer(
         })?;
 
     // Check pipeline state
-    let pipeline_state = pipeline.state(Some(gst::ClockTime::from_seconds(2)));
-    info!("Pipeline current state: {:?}", pipeline_state);
+    // let pipeline_state = pipeline.state(Some(gst::ClockTime::from_seconds(2)));
+    // info!("Pipeline current state: {:?}", pipeline_state);
 
     // Generate unique names for elements based on session ID
     let element_suffix = &request.session_id.replace("-", "");
@@ -232,8 +232,8 @@ pub async fn process_webrtc_offer(
             })?;
         
         // Debug element state
-        let element_state = element.state(Some(gst::ClockTime::from_mseconds(100)));
-        info!("Element {} is in state: {:?}", element.name(), element_state);
+        // let element_state = element.state(Some(gst::ClockTime::from_mseconds(100)));
+        // info!("Element {} is in state: {:?}", element.name(), element_state);
     }
 
     let _pipeline_state = pipeline.set_state(gst::State::Playing);

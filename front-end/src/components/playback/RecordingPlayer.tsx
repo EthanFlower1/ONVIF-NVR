@@ -11,6 +11,7 @@ import {
 import { Badge } from '../badge';
 import { Heading } from '../heading';
 import { Text } from '../text';
+import Hls from 'hls.js';
 
 interface RecordingPlayerProps {
   recordingUrl: string;
@@ -21,6 +22,7 @@ interface RecordingPlayerProps {
   eventType?: string;
   duration?: number;
   onClose?: () => void;
+  isHls?: boolean;
 }
 
 const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
@@ -31,7 +33,8 @@ const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
   endTime,
   eventType = 'continuous',
   duration = 0,
-  onClose
+  onClose,
+  isHls = false
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -42,6 +45,7 @@ const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [hls, setHls] = useState<Hls | null>(null);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -79,13 +83,66 @@ const RecordingPlayer: React.FC<RecordingPlayerProps> = ({
 
   // Effect for loading the video source
   useEffect(() => {
-    if (videoRef.current && recordingUrl) {
-      setIsLoading(true);
-      setError(null);
+    if (!videoRef.current || !recordingUrl) return;
+    
+    setIsLoading(true);
+    setError(null);
+
+    // Check if the URL is an HLS stream or explicitly marked as HLS
+    const isHlsStream = isHls || recordingUrl.includes('.m3u8');
+    
+    if (isHlsStream && Hls.isSupported()) {
+      // Clean up any existing HLS instance
+      if (hls) {
+        hls.destroy();
+      }
+      
+      // Create a new HLS instance
+      const newHls = new Hls({
+        enableWorker: true,
+        // Other HLS.js config options can be added here
+      });
+      
+      newHls.loadSource(recordingUrl);
+      newHls.attachMedia(videoRef.current);
+      
+      newHls.on(Hls.Events.MANIFEST_PARSED, () => {
+        // Video is ready to play
+        if (videoRef.current) {
+          videoRef.current.play().catch(e => {
+            console.warn('Auto-play prevented:', e);
+          });
+        }
+      });
+      
+      newHls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          console.error('HLS error:', data);
+          setError(`Error loading video stream: ${data.type}`);
+          setIsLoading(false);
+        }
+      });
+      
+      setHls(newHls);
+    } else if (isHlsStream && videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+      // For Safari which has built-in HLS support
+      videoRef.current.src = recordingUrl;
+      videoRef.current.load();
+    } else {
+      // Regular video file
       videoRef.current.src = recordingUrl;
       videoRef.current.load();
     }
-  }, [recordingUrl]);
+  }, [recordingUrl, isHls]);
+  
+  // Cleanup HLS instance on component unmount
+  useEffect(() => {
+    return () => {
+      if (hls) {
+        hls.destroy();
+      }
+    };
+  }, [hls]);
 
   // Play/Pause toggle
   const togglePlay = () => {

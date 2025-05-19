@@ -8,7 +8,7 @@ import { Heading } from "../components/heading";
 import { Text } from "../components/text";
 import { Select } from "../components/select";
 import { Input } from "../components/input";
-import RecordingPlayer from "../components/playback/RecordingPlayer";
+import { RecordingPlayer, HlsRecordingPlayer } from "../components/playback";
 
 // Recording type interface
 interface Recording {
@@ -53,6 +53,7 @@ export default function Recordings() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isPlayerVisible, setIsPlayerVisible] = useState(false);
   const [playerRecordingUrl, setPlayerRecordingUrl] = useState<string>('');
+  const [useHlsPlayer, setUseHlsPlayer] = useState(true);
 
   // Fetch cameras data
   useEffect(() => {
@@ -130,6 +131,12 @@ export default function Recordings() {
       ...prev,
       [name]: value
     }));
+  };
+  
+  // Handle camera playback
+  const handleCameraPlayback = (cameraId: string) => {
+    // Navigate to playback page with camera_id parameter
+    window.location.href = `/playback?camera_id=${cameraId}`;
   };
 
   // Format byte size to human-readable format
@@ -300,8 +307,17 @@ export default function Recordings() {
                 />
               </div>
 
-              <div className="flex items-end">
+              <div className="flex items-end space-x-2">
                 <Button type="submit" className="w-full">Search</Button>
+                {searchParams.camera_id && (
+                  <Button 
+                    type="button" 
+                    className="w-full bg-blue-500 hover:bg-blue-600"
+                    onClick={() => handleCameraPlayback(searchParams.camera_id!)}
+                  >
+                    View Camera Stream
+                  </Button>
+                )}
               </div>
             </form>
           </div>
@@ -325,12 +341,13 @@ export default function Recordings() {
                   <TableHeader>Resolution</TableHeader>
                   <TableHeader>Size</TableHeader>
                   <TableHeader>Actions</TableHeader>
+                  <TableHeader>Camera Stream</TableHeader>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {filteredRecordings.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-4">
+                    <TableCell colSpan={9} className="text-center py-4">
                       No recordings found
                     </TableCell>
                   </TableRow>
@@ -353,9 +370,14 @@ export default function Recordings() {
                           <button
                             onClick={() => {
                               setSelectedRecording(recording);
-                              // Use direct MP4 URL
-                              const mediaUrl = `http://localhost:4750/playback/video/${recording.id}`;
-                              setPlayerRecordingUrl(mediaUrl);
+                              if (useHlsPlayer) {
+                                // HLS URL is handled by the HlsRecordingPlayer component with explicit server URL
+                                setPlayerRecordingUrl('');
+                              } else {
+                                // Use direct MP4 URL for regular player with explicit server URL
+                                const mediaUrl = `http://localhost:4750/playback/video/${recording.id}`;
+                                setPlayerRecordingUrl(mediaUrl);
+                              }
                               setIsPlayerVisible(true);
                             }}
                             className="text-blue-600 hover:text-blue-900"
@@ -385,6 +407,16 @@ export default function Recordings() {
                           </button>
                         </div>
                       </TableCell>
+                      <TableCell>
+                        <button
+                          onClick={() => handleCameraPlayback(recording.camera_id)}
+                          className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center text-sm"
+                          title="View Camera Stream"
+                        >
+                          <PlayIcon className="h-4 w-4 mr-1" />
+                          Camera Stream
+                        </button>
+                      </TableCell>
                     </TableRow>
                   ))
                 )}
@@ -397,16 +429,44 @@ export default function Recordings() {
         {isPlayerVisible && selectedRecording && (
           <div className="lg:w-2/5 rounded-lg mt-4 lg:mt-0">
             <div className="sticky top-4">
-              <RecordingPlayer
-                recordingUrl={playerRecordingUrl}
-                recordingId={selectedRecording.id}
-                cameraName={getCameraName(selectedRecording.camera_id)}
-                startTime={selectedRecording.start_time}
-                endTime={selectedRecording.end_time || undefined}
-                eventType={selectedRecording.event_type}
-                duration={selectedRecording.duration}
-                onClose={() => setIsPlayerVisible(false)}
-              />
+              {useHlsPlayer ? (
+                <HlsRecordingPlayer
+                  recordingId={selectedRecording.id}
+                  cameraName={getCameraName(selectedRecording.camera_id)}
+                  startTime={selectedRecording.start_time}
+                  endTime={selectedRecording.end_time || undefined}
+                  eventType={selectedRecording.event_type}
+                  duration={selectedRecording.duration}
+                  onClose={() => setIsPlayerVisible(false)}
+                  serverUrl="http://localhost:4750"
+                />
+              ) : (
+                <RecordingPlayer
+                  recordingUrl={playerRecordingUrl}
+                  recordingId={selectedRecording.id}
+                  cameraName={getCameraName(selectedRecording.camera_id)}
+                  startTime={selectedRecording.start_time}
+                  endTime={selectedRecording.end_time || undefined}
+                  eventType={selectedRecording.event_type}
+                  duration={selectedRecording.duration}
+                  onClose={() => setIsPlayerVisible(false)}
+                />
+              )}
+              
+              {/* Toggle between HLS and direct MP4 */}
+              <div className="mt-2 flex justify-end space-x-2">
+                <button
+                  onClick={() => setUseHlsPlayer(!useHlsPlayer)}
+                  className="text-xs text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded"
+                >
+                  {useHlsPlayer ? 'Switch to Direct MP4' : 'Switch to HLS Streaming'}
+                </button>
+                {selectedRecording && (
+                  <div className="text-xs text-gray-500">
+                    {useHlsPlayer ? 'Using HLS' : 'Using Direct MP4'} | ID: {selectedRecording.id.substring(0, 8)}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -482,9 +542,14 @@ export default function Recordings() {
                 className="bg-indigo-600 hover:bg-indigo-700 text-white"
                 disabled={selectedRecording.file_size === 0}
                 onClick={() => {
-                  // Use direct MP4 URL
-                  const mediaUrl = `http://localhost:4750/recording/${selectedRecording.id}/media`;
-                  setPlayerRecordingUrl(mediaUrl);
+                  if (useHlsPlayer) {
+                    // Let the HlsRecordingPlayer handle the URL with server URL
+                    setPlayerRecordingUrl('');
+                  } else {
+                    // Use direct MP4 URL with explicit server URL
+                    const mediaUrl = `http://localhost:4750/playback/video/${selectedRecording.id}`;
+                    setPlayerRecordingUrl(mediaUrl);
+                  }
                   setIsPlayerVisible(true);
                   setIsDetailModalOpen(false);
                 }}

@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Docker
+.docker
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Build artifacts
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Documentation files
+*.md
+LICENSE
+
+# Environment files
+.env*
+
+# Large directories that don't need to be copied
+recordings/*
+public/hls/*
+
+# Development and temp files
+**/.DS_Store
+**/._.DS_Store
+**/Thumbs.db
+**/*.swp
+**/*.tmp
+
+# Editor directories and files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Keep specific Markdown files for documentation inside the container
+!DOCKER_DEPLOYMENT.md
+!NGINX_CONFIG.md
+!NGINX_VOD_INTEGRATION.md

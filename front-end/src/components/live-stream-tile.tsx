@@ -4,6 +4,7 @@ interface WebRTCStreamPlayerProps {
   streamId: string;
   serverUrl?: string;
   cameraName: string;
+  stream: any;
 }
 
 interface StreamStats {
@@ -22,7 +23,8 @@ interface WebRTCIceServer {
 const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
   cameraName,
   streamId,
-  serverUrl = window.location.origin
+  serverUrl = window.location.origin,
+  stream,
 }) => {
   // Add a debug log on component initialization
 
@@ -192,12 +194,11 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
         lastStatsTimeRef.current = now;
       }
 
-      if (videoStats && videoStats.frameWidth && videoStats.frameHeight && mountedRef.current) {
-        setStats(prevStats => ({
-          ...prevStats,
-          resolution: `${videoStats.frameWidth}x${videoStats.frameHeight}`
-        }));
-      }
+      setStats(prevStats => ({
+        ...prevStats,
+        resolution: `${stream.width}x${stream.height}`
+      }));
+
     } catch (e) {
       console.error("Error getting stats:", e);
     }
@@ -547,6 +548,7 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
       }
     }, 500);
 
+    console.log("CAMERA NAME: ", cameraName)
     // Return cleanup function
     return () => {
       console.log('Component unmounting, cleaning up WebRTC connections');

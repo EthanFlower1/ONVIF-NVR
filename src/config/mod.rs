@@ -116,7 +116,14 @@ pub struct DatabaseConfig {
 }
 
 fn default_db_url() -> String {
-    "postgres://postgres:postgres@localhost:5432/server".to_string()
+    // Get database connection parameters from environment variables or use defaults
+    let host = std::env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+    let user = std::env::var("POSTGRES_USER").unwrap_or_else(|_| "postgres".to_string());
+    let password = std::env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "postgres".to_string());
+    let db = std::env::var("POSTGRES_DB").unwrap_or_else(|_| "server".to_string());
+
+    format!("postgres://{}:{}@{}:{}/{}", user, password, host, port, db)
 }
 
 fn default_max_connections() -> u32 {
@@ -228,13 +235,21 @@ impl Default for MessageBrokerConfig {
     }
 }
 
+/// Helper to get environment variables with defaults
+fn get_env_var<T: std::str::FromStr>(name: &str, default: T) -> T {
+    std::env::var(name)
+        .ok()
+        .and_then(|val| val.parse::<T>().ok())
+        .unwrap_or(default)
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             api: ApiConfig {
-                address: "0.0.0.0".to_string(),
-                port: 4750,
-                log_level: "info".to_string(),
+                address: std::env::var("API_ADDRESS").unwrap_or_else(|_| "0.0.0.0".to_string()),
+                port: get_env_var("RUST_SERVER_PORT", 4750),
+                log_level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
             },
             onvif: OnvifConfig {
                 discovery_address: "239.255.255.250".to_string(),
@@ -244,7 +259,9 @@ impl Default for Config {
             },
             recording: RecordingConfig {
                 storage_path: {
-                    let recordings_dir = PathBuf::from("./recordings");
+                    let recordings_dir = PathBuf::from(
+                        std::env::var("RECORDINGS_PATH").unwrap_or_else(|_| "./recordings".to_string())
+                    );
                     // Create the directory if it doesn't exist
                     if !recordings_dir.exists() {
                         let _ = std::fs::create_dir_all(&recordings_dir);
@@ -252,10 +269,10 @@ impl Default for Config {
                     // Use absolute path if possible, otherwise use relative
                     std::fs::canonicalize(&recordings_dir).unwrap_or(recordings_dir)
                 },
-                max_storage_gb: 500,
-                segment_duration: 30,      // 5 minutes
-                format: "mp4".to_string(), // Change default to MP4 format
-                retention_days: 30,
+                max_storage_gb: get_env_var("MAX_STORAGE_GB", 500),
+                segment_duration: get_env_var("SEGMENT_DURATION", 30), // 30 seconds
+                format: std::env::var("RECORDING_FORMAT").unwrap_or_else(|_| "mp4".to_string()),
+                retention_days: get_env_var("RETENTION_DAYS", 30),
                 cleanup: StorageCleanupConfig::default(),
             },
             streaming: StreamingConfig {

@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import WebRTCStreamPlayer from "../components/live-stream-tile";
-import RecordingControlButton from "../components/recording-control-button";
 
 export default function Liveview() {
   const [data, setData] = useState<any[]>([]);
@@ -77,7 +76,8 @@ export default function Liveview() {
       {!loading && !error && (
         <div
           className={`
-flex
+            grid ${getGridClass(streamCount)} gap-4 h-full
+            auto-rows-fr
           `}
         >
           {data.map((camera_with_stream) =>
@@ -92,14 +92,8 @@ flex
                     cameraName={camera_with_stream.camera.name}
                     streamId={stream.id}
                     serverUrl="http://localhost:4750"
+                    stream={stream}
                   />
-                  {/* <div className="absolute bottom-4 right-4 z-10"> */}
-                  {/*   <RecordingControlButton */}
-                  {/*     cameraId={camera_with_stream.camera.id} */}
-                  {/*     streamId={stream.id} */}
-                  {/*     buttonSize="sm" */}
-                  {/*   /> */}
-                  {/* </div> */}
                 </div>
               );
             })

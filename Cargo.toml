@@ -1,7 +1,7 @@
 [package]
 name = "g-streamer"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 gstreamer = "0.23.5"
@@ -49,6 +49,7 @@ regex = "1.10.4"
 gstreamer-audio = "0.23.5"
 once_cell = "1.21.3"
 tokio-util = "0.7.15"
+async-global-executor = "=3.0.0"
 
 [[example]]
 name = "simple_stream"
