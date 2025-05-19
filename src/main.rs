@@ -1,10 +1,15 @@
+use crate::messaging::broker::MessageBrokerTrait;
+use crate::security::auth::AuthService;
 use anyhow::Result;
-use db::{migrations, repositories::cameras::CamerasRepository};
+use db::migrations;
+use db::repositories::recordings::RecordingsRepository;
 use gst::prelude::*;
 use gstreamer as gst;
-use log::info;
-use sqlx::{postgres::PgPoolOptions, PgPool};
-use std::sync::Arc;
+use log::{debug, error, info, warn};
+use recorder::{RecordingManager, RecordingScheduler, StorageCleanupService};
+use sqlx::postgres::PgPoolOptions;
+use std::{sync::Arc, thread};
+use stream_manager::StreamManager;
 
 #[path = "./tutorial-common.rs"]
 mod tutorials_common;
@@ -14,10 +19,13 @@ mod config;
 mod db;
 mod device_manager;
 mod error;
+mod messaging;
+mod recorder;
+mod security;
 mod stream_manager;
-pub use error::Error;
+mod utils;
 
-use stream_manager::StreamManager;
+pub use error::Error;
 
 async fn run_app() -> Result<()> {
     // Initialize logging
@@ -26,18 +34,19 @@ async fn run_app() -> Result<()> {
 
     // Initialize GStreamer
     gst::init()?;
-    info!("GStreamer initialized successfully");
+    debug!("GStreamer initialized successfully");
 
+    // Store it for access by other threads
+    // Run the main loop - this will block until quit() is called
     let config = config::load_config(None)?;
-    info!("Configuration loaded");
+    debug!("Configuration loaded");
     // Load configuration
     // let config = config::setup_config()?;
     // info!("Configuration loaded");
 
-    // Create shared stream manager
-
+    // Create database connection pool
     let db_pool = PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(200)
         .connect(&config.database.url)
         .await?;
 
@@ -52,6 +61,30 @@ async fn run_app() -> Result<()> {
 
     let db_pool = std::sync::Arc::new(db_pool);
 
+    // Create auth service
+    let auth_service = Arc::new(AuthService::new(db_pool.clone(), &config.security));
+
+    // Create and initialize message broker
+    let message_broker =
+        messaging::broker::create_message_broker(config.message_broker.clone()).await?;
+    info!("Message broker initialized");
+
+    // Publish system startup event
+    if let Err(e) = message_broker
+        .publish(
+            messaging::EventType::SystemStartup,
+            None,
+            serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
+        .await
+    {
+        warn!("Failed to publish system startup event: {}", e);
+    }
+
+    // Create and initialize stream manager
     let stream_manager = Arc::new(StreamManager::new(db_pool.clone()));
     let connected_cameras = &stream_manager.connect().await?;
     info!(
@@ -59,22 +92,97 @@ async fn run_app() -> Result<()> {
         connected_cameras
     );
 
-    let http_server = api::rest::RestApi::new(&config.api, db_pool, stream_manager).unwrap();
+    // Setup recordings directory from config
+    let recordings_dir = &config.recording.storage_path;
+    std::fs::create_dir_all(recordings_dir)?;
+
+    // Create the recording manager with configuration from settings
+    let recording_manager = Arc::new(RecordingManager::new(
+        db_pool.clone(),
+        stream_manager.clone(),
+        recordings_dir,
+        config.recording.segment_duration as i64,
+        &config.recording.format,
+    ));
+
+    // Pass the message broker to recording_manager so it can publish events
+    recording_manager
+        .set_message_broker(message_broker.clone())
+        .await?;
+
+    // Create and start recording scheduler
+    let recording_scheduler = Arc::new(RecordingScheduler::new(
+        db_pool.clone(),
+        stream_manager.clone(),
+        recording_manager.clone(),
+        60, // Check for schedule changes every 60 seconds
+    ));
+
+    // Create storage cleanup service
+    let storage_cleanup = Arc::new(StorageCleanupService::new(
+        config.recording.cleanup.clone(),
+        RecordingsRepository::new(db_pool.clone()),
+        recordings_dir,
+    ));
+
+    // Pass the message broker to storage_cleanup service
+    storage_cleanup
+        .set_message_broker(message_broker.clone())
+        .await?;
+
+    // Start the recording scheduler
+    recording_scheduler.clone().start().await?;
+    info!("Recording scheduler started");
+
+    // Start the storage cleanup service
+    storage_cleanup.clone().start().await?;
+    info!("Storage cleanup service started");
+
+    // Start the REST API
+    let http_server = api::rest::RestApi::new(
+        &config.api,
+        db_pool,
+        stream_manager,
+        auth_service,
+        message_broker.clone(),
+    )
+    .unwrap();
+
+    thread::spawn(move || {
+        // Create a new main loop for this thread
+        let main_loop = glib::MainLoop::new(None, false);
+        // Run the main loop - this blocks until quit() is called
+        main_loop.run();
+    });
 
     let _ = http_server.run().await;
-    //
-    // let websocket_api = api::websocket::setup_websocket_api(
-    //     camera_manager.clone(),
-    //     recording_service.clone(),
-    //     streaming_service.clone(),
-    //     analytics_service.clone(),
-    // )
-    // .await?;
     info!("API servers started");
 
-    // In a real application, we would wait for termination signals
+    // Wait for termination signals
     tokio::signal::ctrl_c().await?;
     info!("Shutting down...");
+
+    // Shutdown recording scheduler and stop all recordings
+    recording_scheduler.shutdown().await?;
+    info!("Recording scheduler stopped");
+
+    // Publish a system shutdown event
+    if let Err(e) = message_broker
+        .publish(
+            messaging::EventType::SystemShutdown,
+            None,
+            serde_json::json!({"reason": "Normal shutdown"}),
+        )
+        .await
+    {
+        error!("Failed to publish shutdown event: {}", e);
+    }
+
+    // Allow time for the message to be sent before shutting down
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+    // Finalize any pending storage operations
+    std::thread::sleep(std::time::Duration::from_secs(2));
 
     Ok(())
 }

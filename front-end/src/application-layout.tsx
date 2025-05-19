@@ -30,10 +30,15 @@ import {
   PlusIcon,
   ShieldCheckIcon,
   UserCircleIcon,
+  SignalIcon,
+  VideoCameraIcon,
+  FilmIcon,
+  CalendarIcon
 } from '@heroicons/react/16/solid'
 import {
   Cog6ToothIcon,
   HomeIcon,
+  PlayIcon,
   QuestionMarkCircleIcon,
   SparklesIcon,
   Square2StackIcon,
@@ -58,7 +63,7 @@ function AccountDropdownMenu({ anchor }: { anchor: 'top start' | 'bottom end' })
         <DropdownLabel>Share feedback</DropdownLabel>
       </DropdownItem>
       <DropdownDivider />
-      <DropdownItem href="/login">
+      <DropdownItem as="button" onClick={() => window.dispatchEvent(new CustomEvent('logout'))}>
         <ArrowRightStartOnRectangleIcon />
         <DropdownLabel>Sign out</DropdownLabel>
       </DropdownItem>
@@ -127,20 +132,28 @@ export function ApplicationLayout({
           <SidebarBody>
             <SidebarSection>
               <SidebarItem href="/" current={pathname === '/'}>
-                <HomeIcon />
-                <SidebarLabel>Home</SidebarLabel>
+                <PlayIcon />
+                <SidebarLabel>Live</SidebarLabel>
               </SidebarItem>
               <SidebarItem href="/discovery" current={pathname.startsWith('/discovery')}>
-                <Square2StackIcon />
+                <SignalIcon />
                 <SidebarLabel>Discovery</SidebarLabel>
               </SidebarItem>
               <SidebarItem href="/cameras" current={pathname.startsWith('/cameras')}>
-                <Square2StackIcon />
+                <VideoCameraIcon />
                 <SidebarLabel>Cameras</SidebarLabel>
               </SidebarItem>
-              <SidebarItem href="/orders" current={pathname.startsWith('/orders')}>
-                <TicketIcon />
-                <SidebarLabel>Orders</SidebarLabel>
+              <SidebarItem href="/recordings" current={pathname.startsWith('/recordings')}>
+                <FilmIcon />
+                <SidebarLabel>Recordings</SidebarLabel>
+              </SidebarItem>
+              <SidebarItem href="/playback" current={pathname.startsWith('/playback')}>
+                <PlayIcon />
+                <SidebarLabel>Playback</SidebarLabel>
+              </SidebarItem>
+              <SidebarItem href="/recording-schedules" current={pathname.startsWith('/recording-schedules')}>
+                <CalendarIcon />
+                <SidebarLabel>Recording Schedules</SidebarLabel>
               </SidebarItem>
               <SidebarItem href="/settings" current={pathname.startsWith('/settings')}>
                 <Cog6ToothIcon />

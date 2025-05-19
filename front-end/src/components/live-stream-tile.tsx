@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 interface WebRTCStreamPlayerProps {
   streamId: string;
   serverUrl?: string;
+  cameraName: string;
+  stream: any;
 }
 
 interface StreamStats {
@@ -19,11 +21,12 @@ interface WebRTCIceServer {
 }
 
 const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
+  cameraName,
   streamId,
-  serverUrl = window.location.origin
+  serverUrl = window.location.origin,
+  stream,
 }) => {
   // Add a debug log on component initialization
-  console.log(`WebRTCStreamPlayer initializing with streamId: ${streamId} at ${new Date().toISOString()}`);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -34,6 +37,7 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
     fps: '0 FPS',
     latency: '--'
   });
+  const [showStats, setShowStats] = useState(false);
 
   // Use refs to store connection objects so they persist between renders
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -190,12 +194,11 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
         lastStatsTimeRef.current = now;
       }
 
-      if (videoStats && videoStats.frameWidth && videoStats.frameHeight && mountedRef.current) {
-        setStats(prevStats => ({
-          ...prevStats,
-          resolution: `${videoStats.frameWidth}x${videoStats.frameHeight}`
-        }));
-      }
+      setStats(prevStats => ({
+        ...prevStats,
+        resolution: `${stream.width}x${stream.height}`
+      }));
+
     } catch (e) {
       console.error("Error getting stats:", e);
     }
@@ -316,7 +319,6 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
       }
 
       const sessionData = await sessionResponse.json();
-      console.log('Session created:', sessionData.session_id);
       sessionIdRef.current = sessionData.session_id;
 
       // Step 2: Create peer connection with only IPv4 STUN servers if possible
@@ -331,7 +333,6 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
         iceTransportPolicy: 'all'
       };
 
-      console.log('Creating RTCPeerConnection');
       const pc = new RTCPeerConnection(configuration);
       peerConnectionRef.current = pc;
 
@@ -351,12 +352,10 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
       };
 
       pc.ontrack = (event: RTCTrackEvent) => {
-        console.log('Track received:', event.track.kind);
 
         if (!mountedRef.current) return;
 
         if (event.track.kind === "video" && videoRef.current) {
-          console.log('Setting video track to element');
           videoRef.current.srcObject = event.streams[0];
 
           // We already have video event handlers set up in the video-specific useEffect
@@ -373,7 +372,6 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
         if (!pc || !mountedRef.current) return;
 
         const state = pc.connectionState;
-        console.log('Connection state changed:', state);
 
         if (state === "connected") {
           setStatus('Connected');
@@ -399,8 +397,6 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
 
       if (!mountedRef.current) return; // Check if still mounted
 
-      // Step 3: Create offer with specific constraints
-      console.log('Creating offer');
       // Using the legacy format for compatibility with older servers
       const offerOptions = {
         offerToReceiveAudio: true,
@@ -408,10 +404,10 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
       };
 
       const offer = await pc.createOffer(offerOptions);
-      console.log('Offer created:', {
-        sdpType: offer.type,
-        sdpLength: offer.sdp.length
-      });
+      // console.log('Offer created:', {
+      //   sdpType: offer.type,
+      //   sdpLength: offer.sdp.length
+      // });
 
       if (!mountedRef.current) return; // Check if still mounted
 
@@ -445,13 +441,6 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
       }
 
       // Step 5: Send offer to server
-      console.log('Sending offer to server:', {
-        sessionId: sessionIdRef.current,
-        streamId,
-        sdpType: actualOffer.type,
-        sdpLength: actualOffer.sdp.length
-      });
-
       // Ensure we're sending the exact format the server expects
       const offerPayload = {
         session_id: sessionIdRef.current,
@@ -460,7 +449,6 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
         type_field: actualOffer.type
       };
 
-      console.log('Offer payload structure:', Object.keys(offerPayload));
 
       const offerResponse = await fetch(`${serverUrl}/webrtc/offer`, {
         method: 'POST',
@@ -541,7 +529,7 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
       try {
         await videoRef.current.play();
         console.log('Video playback started by user interaction');
-        setStatus('Connected (Playing)');
+        setStatus('Connected');
       } catch (error) {
         console.error('Failed to play video after click:', error);
       }
@@ -550,7 +538,6 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
 
   // Make sure we're cleaning up the component properly on unmount
   useEffect(() => {
-    console.log('Component mounting with streamId:', streamId);
     mountedRef.current = true;
 
     // Important: Add a small delay before connecting to ensure any previous
@@ -561,6 +548,7 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
       }
     }, 500);
 
+    console.log("CAMERA NAME: ", cameraName)
     // Return cleanup function
     return () => {
       console.log('Component unmounting, cleaning up WebRTC connections');
@@ -589,7 +577,7 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
       videoElement.onplay = () => console.log('Video play event triggered');
       videoElement.onplaying = () => {
         console.log('Video playing event triggered');
-        setStatus('Connected (Playing)');
+        setStatus('Connected');
       };
 
       // If the browser suspends the video for any reason
@@ -607,42 +595,87 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
     }
   }, []);  // Empty dependency array ensures this only runs once
 
+  // Get status indicator color
+  const getStatusColor = () => {
+    if (status.includes('Connected')) return 'bg-green-500';
+    if (status === 'Connecting...') return 'bg-yellow-500';
+    return 'bg-red-500';
+  };
+
+  // Determine if we should show the spinner
+  const isConnecting = status === 'Connecting...';
+
   return (
-    <div className="w-full h-full flex flex-col overflow-hidden">
+    <div
+      className="w-full h-full flex flex-col overflow-hidden relative"
+      onMouseEnter={() => setShowStats(true)}
+      onMouseLeave={() => setShowStats(false)}
+    >
       <div className="relative flex-grow bg-black">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted // Mute video to allow autoplay in most browsers
-          className="w-full h-full object-contain cursor-pointer"
-          onClick={handleVideoClick}
-        />
+        <TransformWrapper>
+          <TransformComponent>
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted // Mute video to allow autoplay in most browsers
+              className="w-full h-full object-contain cursor-pointer"
+              onClick={handleVideoClick}
+            />
+          </TransformComponent>
+        </TransformWrapper>
         <audio
           ref={audioRef}
           autoPlay
           playsInline
         />
-        <div className="absolute top-2 left-2 bg-black bg-opacity-60 text-white px-2 py-1 rounded text-sm">
-          {status}
-        </div>
-        {/* Simplified play button overlay */}
-        {status === 'Click to play' && (
-          <div
-            className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-40 cursor-pointer"
-            onClick={handleVideoClick}
-          >
-            <div className="bg-white bg-opacity-80 text-black p-3 rounded-full">
-              ▶️
+
+
+        {/* Stats overlays - all aligned on top right - only show when hovering */}
+        {showStats && (
+          <>
+            {/* Status indicator with colored circle (top left) */}
+            <div className="absolute top-2 left-2 bg-black bg-opacity-10 text-white px-2 py-0.5 rounded-full flex items-center space-x-1">
+              <div className={`w-2 h-2 rounded-full ${getStatusColor()}`}></div>
+              <span className="text-xs">{status}</span>
+
+              {/* Loading spinner for connecting state */}
+              {isConnecting && (
+                <svg className="animate-spin ml-1 h-3 w-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              )}
             </div>
-          </div>
+            {/* Network stats group in top right corner, stacked vertically */}
+            <div className="absolute top-2 right-2 flex flex-col space-y-1 items-end">
+              {/* Resolution */}
+              <div className="bg-black/60 text-white text-xs px-2 py-0.5 rounded-lg">
+                {stats.resolution}
+              </div>
+
+              {/* Data rate */}
+              <div className="bg-black/60 text-white text-xs px-2 py-0.5 rounded-lg">
+                {stats.dataRate}
+              </div>
+
+              {/* FPS */}
+              <div className="bg-black/60 text-white text-xs px-2 py-0.5 rounded-lg">
+                {stats.fps}
+              </div>
+
+              {/* Latency */}
+              <div className="bg-black/60 text-white text-xs px-2 py-0.5 rounded-lg">
+                Jitter: {stats.latency}
+              </div>
+            </div>
+
+            {/* Stream name overlay at bottom center */}
+            <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black/60  text-white px-3 py-1 rounded-lg text-sm">
+              {cameraName}
+            </div>
+          </>
         )}
-      </div>
-      <div className="flex justify-between p-1 bg-gray-800 text-white text-xs font-mono">
-        <span>{stats.resolution}</span>
-        <span>{stats.dataRate}</span>
-        <span>{stats.fps}</span>
-        <span>Jitter: {stats.latency}</span>
       </div>
     </div>
   );

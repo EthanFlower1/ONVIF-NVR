@@ -25,6 +25,15 @@ CREATE INDEX IF NOT EXISTS idx_recordings_schedule ON recordings(schedule_id);
 CREATE INDEX IF NOT EXISTS idx_recordings_time_range ON recordings(start_time, end_time);
 CREATE INDEX IF NOT EXISTS idx_recordings_start_time ON recordings(start_time DESC);
 CREATE INDEX IF NOT EXISTS idx_recordings_timerange ON recordings USING btree (start_time, end_time);
+CREATE INDEX IF NOT EXISTS idx_recordings_camera_id ON recordings(camera_id);
+CREATE INDEX IF NOT EXISTS idx_recordings_stream_id ON recordings(stream_id);
+CREATE INDEX IF NOT EXISTS idx_recordings_camera_start_time ON recordings(camera_id, start_time);
+CREATE INDEX IF NOT EXISTS idx_recordings_stream_start_time ON recordings(stream_id, start_time);
+CREATE INDEX IF NOT EXISTS idx_recordings_start_time ON recordings(start_time);
+CREATE INDEX IF NOT EXISTS idx_recordings_event_type ON recordings(event_type);
+CREATE INDEX IF NOT EXISTS idx_recordings_parent_id ON recordings(parent_recording_id);
+CREATE INDEX IF NOT EXISTS idx_recordings_segment_id ON recordings(parent_recording_id, segment_id);
+
 
 -- 5. Create indices for the camera_events table
 CREATE INDEX IF NOT EXISTS idx_events_camera_id ON events(camera_id);

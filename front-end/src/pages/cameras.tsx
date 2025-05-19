@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/table";
+import { PencilIcon, TrashIcon } from "@heroicons/react/24/outline";
+import { CheckIcon, XMarkIcon } from "@heroicons/react/16/solid";
 
 export default function Cameras() {
   const [data, setData] = useState<any[]>([]);
@@ -69,16 +71,27 @@ export default function Cameras() {
     // For now, we'll just update the local state
     setData(data.map(item => {
       if (item.camera.id === id) {
+        const camera = {
+          ...item.camera,
+          name: editedData.name || `Camera ${data.indexOf(item) + 1}`,
+          username: editedData.username,
+          password: editedData.password
+        };
+
+        fetch(`http://localhost:4750/api/cameras/${camera.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(camera)
+        });
+
         return {
           ...item,
-          camera: {
-            ...item.camera,
-            name: editedData.name || `Camera ${data.indexOf(item) + 1}`,
-            username: editedData.username,
-            password: editedData.password
-          }
+          camera,
         };
       }
+
       return item;
     }));
     setEditingId(null);
@@ -94,6 +107,31 @@ export default function Cameras() {
       ...prev,
       [name]: value
     }));
+  };
+
+  // Placeholder delete function
+  const deleteCamera = async (id: string) => {
+    // In a real implementation, you would make an API call to delete the camera
+    console.log(`Deleting camera with ID: ${id}`);
+    try {
+      const response = await fetch(`http://localhost:4750/api/cameras/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const json = await response.json();
+      console.log("Response: ", json);
+
+      setData(data.filter(item => item.camera.id !== id));
+    } catch (e) {
+      setError(e);
+    } finally {
+      setLoading(false);
+    }
+
+
   };
 
   if (loading) return <div>Loading cameras...</div>;
@@ -168,22 +206,32 @@ export default function Cameras() {
                       onClick={() => saveChanges(device.camera.id)}
                       className="px-2 py-1 bg-green-500 text-white rounded text-sm"
                     >
-                      Save
+                      <CheckIcon className="h-4 w-4" />
                     </button>
                     <button
                       onClick={cancelEditing}
                       className="px-2 py-1 bg-gray-300 rounded text-sm"
                     >
-                      Cancel
+                      <XMarkIcon className="h-4 w-4" />
                     </button>
                   </div>
                 ) : (
-                  <button
-                    onClick={() => startEditing(device)}
-                    className="px-2 py-1 bg-blue-500 text-white rounded text-sm"
-                  >
-                    Edit
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => startEditing(device)}
+                      className="p-1 text-blue-500 hover:text-blue-700"
+                      title="Edit"
+                    >
+                      <PencilIcon className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => deleteCamera(device.camera.id)}
+                      className="p-1 text-red-500 hover:text-red-700"
+                      title="Delete"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  </div>
                 )}
               </TableCell>
             </TableRow>

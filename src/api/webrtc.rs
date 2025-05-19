@@ -125,17 +125,15 @@ pub async fn process_webrtc_offer(
 
     // Get the existing stream using stream_id from StreamManager
     let stream_id = request.stream_id.to_string();
-    let (pipeline, tee) = state
-        .stream_manager
-        .get_stream_access(&stream_id)
+    let (pipeline, tee, _, _) = state.stream_manager.get_stream_access(&stream_id)
         .map_err(|e| {
             error!("Failed to get stream access: {}", e);
             axum::http::StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
     // Check pipeline state
-    let pipeline_state = pipeline.state(Some(gst::ClockTime::from_seconds(2)));
-    info!("Pipeline current state: {:?}", pipeline_state);
+    // let pipeline_state = pipeline.state(Some(gst::ClockTime::from_seconds(2)));
+    // info!("Pipeline current state: {:?}", pipeline_state);
 
     let pipeline_state = pipeline.set_state(gst::State::Playing);
 
@@ -230,13 +228,11 @@ pub async fn process_webrtc_offer(
         })?;
 
         // Debug element state
-        let element_state = element.state(Some(gst::ClockTime::from_mseconds(100)));
-        info!(
-            "Element {} is in state: {:?}",
-            element.name(),
-            element_state
-        );
+        // let element_state = element.state(Some(gst::ClockTime::from_mseconds(100)));
+        // info!("Element {} is in state: {:?}", element.name(), element_state);
     }
+
+    let _pipeline_state = pipeline.set_state(gst::State::Playing);
 
     // Create media engine and API
     let mut media_engine = MediaEngine::default();
@@ -362,14 +358,10 @@ pub async fn process_webrtc_offer(
                 sample_count += 1;
 
                 // Debug log every 30 samples (roughly once per second at 30fps)
-                if sample_count % 30 == 0 {
-                    info!(
-                        "AppSink received {} samples for session {}",
-                        sample_count,
-                        session_id_for_debug.clone()
-                    );
-                }
-
+                // if sample_count % 120 == 0 {
+                //     info!("AppSink received {} samples for session {}", sample_count, session_id_for_debug.clone());
+                // }
+                
                 let sample = match appsink.pull_sample() {
                     Ok(sample) => sample,
                     Err(e) => {
@@ -377,7 +369,7 @@ pub async fn process_webrtc_offer(
                         return Err(gst::FlowError::Error);
                     }
                 };
-
+                
                 let buffer = match sample.buffer() {
                     Some(buffer) => buffer,
                     None => {
@@ -395,14 +387,10 @@ pub async fn process_webrtc_offer(
                 };
 
                 // Debug log every 30 samples
-                if sample_count % 30 == 0 {
-                    info!(
-                        "Buffer size: {} bytes for session {}",
-                        map.size(),
-                        session_id_for_debug.clone()
-                    );
-                }
-
+                // if sample_count % 30 == 0 {
+                //     info!("Buffer size: {} bytes for session {}", map.size(), session_id_for_debug.clone());
+                // }
+                
                 // Create WebRTC sample
                 let webrtc_sample = Sample {
                     data: map.as_slice().to_vec().into(),
@@ -444,10 +432,63 @@ pub async fn process_webrtc_offer(
     let session_id_mon = request.session_id.clone();
     let state_mon = Arc::clone(&state);
     let pc_mon = Arc::clone(&peer_connection);
-    let tee_src_pad_clone = tee_src_pad.clone();
-    let tee_clone = tee.clone();
-    let pipeline_clone = pipeline.clone();
-    let element_suffix_clone = element_suffix.clone();
+    
+    peer_connection.on_peer_connection_state_change(Box::new(move |connection_state| {
+        let pc_clone = Arc::clone(&pc_mon);
+        let session_id = session_id_mon.clone();
+        let state_clone = Arc::clone(&state_mon);
+        
+        Box::pin(async move {
+            match connection_state {
+                webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Connected => {
+                    info!("WebRTC connection established for session: {}", session_id);
+                },
+                webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Disconnected => {
+                    info!("WebRTC connection disconnected for session: {}", session_id);
+                    let peer_connections_handle = Arc::clone(&state_clone.peer_connections);
+                    let session_id_for_disconnect = session_id.clone();
+                    
+                    tokio::spawn(async move {
+                        let should_terminate = {
+                            let peer_connections = peer_connections_handle.lock().await;
+                            peer_connections.contains_key(&session_id_for_disconnect)
+                        };
+                        
+                        if should_terminate {
+                            info!("Connection did not recover after timeout for session: {}", session_id_for_disconnect);
+                            let mut peer_connections = peer_connections_handle.lock().await;
+                            if peer_connections.remove(&session_id_for_disconnect).is_some() {
+                                info!("Removed peer connection for session: {}", session_id_for_disconnect);
+                            }
+                        }
+                    });
+                },
+                webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Failed
+                | webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Closed => {
+                    info!("WebRTC connection ended (state: {:?}) for session: {}", connection_state, session_id);
+                    
+                    let peer_connections_handle = Arc::clone(&state_clone.peer_connections);
+                    let session_id_for_close = session_id.clone();
+                    
+                    tokio::spawn(async move {
+                        let mut peer_connections = peer_connections_handle.lock().await;
+                        if peer_connections.remove(&session_id_for_close).is_some() {
+                            info!("Removed peer connection for session: {}", session_id_for_close);
+                        }
+
+                        // close_webrtc_session(state, ).await
+                    });
+                    
+                    if connection_state != webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Closed {
+                        if let Err(e) = pc_clone.close().await {
+                            warn!("Error closing peer connection: {}", e);
+                        }
+                    }
+                },
+                _ => debug!("WebRTC connection state changed to {:?} for session: {}", connection_state, session_id),
+            }
+        })
+    }));
 
     peer_connection.on_peer_connection_state_change(Box::new(move |connection_state| {
     let pc_clone = Arc::clone(&pc_mon);
@@ -595,7 +636,136 @@ pub async fn close_webrtc_session(
     } else {
         warn!("No peer connection found for session: {}", session_id);
     }
+     clean_up_gstreamer_elements(&session_id, &state).await;
 
     info!("WebRTC session closed: {}", session_id);
     Json(json!({ "success": true }))
+}
+
+async fn clean_up_gstreamer_elements(session_id: &str, state: &Arc<WebRTCState>) {
+    // Generate unique element suffix
+    let element_suffix = session_id.replace("-", "");
+
+    // Get all streams to check for elements to clean up
+    let stream_list = state.stream_manager.list_streams();
+
+    for (stream_id, _) in stream_list {
+        if let Ok((pipeline, tee, _, _)) = state.stream_manager.get_stream_access(&stream_id) {
+            info!(
+                "Cleaning up GStreamer elements for session {} in stream {}",
+                session_id, stream_id
+            );
+
+            // Element names for this session
+            let queue_name = format!("webrtc_queue_{}", element_suffix);
+            let depay_name = format!("webrtc_depay_{}", element_suffix);
+            let parse_name = format!("webrtc_parse_{}", element_suffix);
+            let appsink_name = format!("webrtc_appsink_{}", element_suffix);
+
+            // Find the elements
+            let queue_opt = pipeline.by_name(&queue_name);
+            let depay_opt = pipeline.by_name(&depay_name);
+            let parse_opt = pipeline.by_name(&parse_name);
+            let appsink_opt = pipeline.by_name(&appsink_name);
+
+            // Check if we found any elements
+            if queue_opt.is_none()
+                && depay_opt.is_none()
+                && parse_opt.is_none()
+                && appsink_opt.is_none()
+            {
+                debug!(
+                    "No elements found for session {} in stream {}",
+                    session_id, stream_id
+                );
+                continue;
+            }
+
+            // First handle unlinking from tee if queue exists
+            if let Some(queue) = &queue_opt {
+                if let Some(queue_sink_pad) = queue.static_pad("sink") {
+                    if let Some(tee_src_pad) = queue_sink_pad.peer() {
+                        // Block the pad before unlinking
+                        if let Some(probe_id) = tee_src_pad
+                            .add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, |_pad, _info| {
+                                gst::PadProbeReturn::Ok
+                            })
+                        {
+                            // Unlink the pads
+                            let _ = tee_src_pad.unlink(&queue_sink_pad);
+
+                            // Release the tee request pad
+                            tee.release_request_pad(&tee_src_pad);
+
+                            // Remove the probe
+                            tee_src_pad.remove_probe(probe_id);
+                        }
+                    }
+                }
+            }
+
+            // Gather all found elements
+            let mut elements = Vec::new();
+            if let Some(e) = queue_opt {
+                elements.push(e);
+            }
+            if let Some(e) = depay_opt {
+                elements.push(e);
+            }
+            if let Some(e) = parse_opt {
+                elements.push(e);
+            }
+            if let Some(e) = appsink_opt {
+                elements.push(e);
+            }
+
+            // Send EOS to elements
+            for element in &elements {
+                let _ = element.send_event(gst::event::Eos::new());
+            }
+
+            // Set elements to NULL state
+            for element in &elements {
+                let _ = element.set_state(gst::State::Null);
+            }
+
+            // Remove elements from pipeline
+            if !elements.is_empty() {
+                match pipeline.remove_many(&elements) {
+                    Ok(_) => info!(
+                        "Successfully removed {} elements for session {}",
+                        elements.len(),
+                        session_id
+                    ),
+                    Err(e) => warn!("Failed to remove elements from pipeline: {:?}", e),
+                }
+            }
+
+            // Check if this was the last connection for this stream
+            let has_other_connections = {
+                let connections = state.peer_connections.lock().await;
+                !connections.is_empty()
+            };
+
+            // If no other connections, set the pipeline to NULL state
+            if !has_other_connections {
+                info!(
+                    "No more active connections for stream {}, stopping pipeline",
+                    stream_id
+                );
+                // if let Err(e) = pipeline.set_state(gst::State::Paused) {
+                //     warn!("Failed to set pipeline to NULL state: {:?}", e);
+                // } else {
+                //     info!("Successfully set pipeline to NULL state");
+                //
+                //     // Remove the stream entirely
+                //     // if let Err(e) = state.stream_manager.remove_stream(&stream_id) {
+                //     //     warn!("Failed to remove stream: {:?}", e);
+                //     // } else {
+                //     //     info!("Successfully removed stream: {}", stream_id);
+                //     // }
+                // }
+            }
+        }
+    }
 }

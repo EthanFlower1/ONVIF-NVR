@@ -32,12 +32,12 @@ impl EventSettingsRepository {
             r#"
             INSERT INTO camera_event_settings (
                 id, camera_id, enabled, event_types, event_topic_expressions,
-                trigger_recording, recording_duration, recording_quality, 
+                trigger_recording, recording_duration, 
                 created_at, updated_at, created_by
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id, camera_id, enabled, event_types, event_topic_expressions,
-                      trigger_recording, recording_duration, recording_quality,
+                      trigger_recording, recording_duration,
                       created_at, updated_at, created_by
             "#,
         )
@@ -48,7 +48,6 @@ impl EventSettingsRepository {
         .bind(&settings_db.event_topic_expressions)
         .bind(settings_db.trigger_recording)
         .bind(settings_db.recording_duration)
-        .bind(settings_db.recording_quality)
         .bind(settings_db.created_at)
         .bind(settings_db.updated_at)
         .bind(settings_db.created_by)
@@ -65,7 +64,7 @@ impl EventSettingsRepository {
         let result = sqlx::query_as::<_, EventSettings>(
             r#"
             SELECT id, camera_id, enabled, event_types, event_topic_expressions,
-                   trigger_recording, recording_duration, recording_quality, 
+                   trigger_recording, recording_duration, 
                    created_at, updated_at, created_by
             FROM camera_event_settings
             WHERE id = $1
@@ -86,7 +85,7 @@ impl EventSettingsRepository {
         let result = sqlx::query_as::<_, EventSettings>(
             r#"
             SELECT id, camera_id, enabled, event_types, event_topic_expressions,
-                   trigger_recording, recording_duration, recording_quality, 
+                   trigger_recording, recording_duration, 
                    created_at, updated_at, created_by
             FROM camera_event_settings
             WHERE camera_id = $1
@@ -114,11 +113,11 @@ impl EventSettingsRepository {
             r#"
             UPDATE camera_event_settings
             SET enabled = $1, event_types = $2, event_topic_expressions = $3,
-                trigger_recording = $4, recording_duration = $5, recording_quality = $6,
+                trigger_recording = $4, recording_duration = $5, 
                 updated_at = $7
             WHERE id = $8
             RETURNING id, camera_id, enabled, event_types, event_topic_expressions,
-                      trigger_recording, recording_duration, recording_quality,
+                      trigger_recording, recording_duration,
                       created_at, updated_at, created_by
             "#,
         )
@@ -127,7 +126,6 @@ impl EventSettingsRepository {
         .bind(&settings_db.event_topic_expressions)
         .bind(settings_db.trigger_recording)
         .bind(settings_db.recording_duration)
-        .bind(settings_db.recording_quality)
         .bind(Utc::now())
         .bind(settings_db.id)
         .fetch_one(&*self.pool)
@@ -158,7 +156,7 @@ impl EventSettingsRepository {
         let result = sqlx::query_as::<_, EventSettings>(
             r#"
             SELECT id, camera_id, enabled, event_types, event_topic_expressions,
-                   trigger_recording, recording_duration, recording_quality, 
+                   trigger_recording, recording_duration,  
                    created_at, updated_at, created_by
             FROM camera_event_settings
             WHERE enabled = true
@@ -176,4 +174,3 @@ impl EventSettingsRepository {
         Ok(result.into_iter().map(EventSettings::from).collect())
     }
 }
-

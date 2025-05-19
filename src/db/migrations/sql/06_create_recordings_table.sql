@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS recordings (
     id UUID PRIMARY KEY,
     camera_id UUID NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
+    stream_id UUID NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
     schedule_id UUID REFERENCES recording_schedules(id),
     start_time TIMESTAMPTZ NOT NULL,
     end_time TIMESTAMPTZ,
@@ -11,7 +12,10 @@ CREATE TABLE IF NOT EXISTS recordings (
     format VARCHAR(50) NOT NULL,
     resolution VARCHAR(50) NOT NULL,
     fps INTEGER NOT NULL,
+    event_type TEXT NOT NULL DEFAULT 'continuous',
     created_at TIMESTAMPTZ NOT NULL,
-    metadata JSONB
+    metadata JSONB,
+    segment_id INTEGER,
+    parent_recording_id UUID 
 );
 

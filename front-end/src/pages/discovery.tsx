@@ -103,10 +103,10 @@ export default function DeviceDiscovery() {
           {loading ? (
             <>
               <Spinner className="mr-2" size="sm" />
-              Discovering...
+              Scanning...
             </>
           ) : (
-            'Discover'
+            'Scan'
           )}
         </Button>
       </div>
@@ -177,7 +177,7 @@ export default function DeviceDiscovery() {
 
       ) : (
         <Text className="mt-8 p-4 border rounded-lg text-zinc-500">
-          No devices discovered yet. Click the Discover button to scan your network.
+          No devices discovered yet. Click the Scan button to scan your network.
         </Text>
       )}
     </div>

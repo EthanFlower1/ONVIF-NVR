@@ -12,6 +12,7 @@ pub struct Config {
     pub streaming: StreamingConfig,
     pub database: DatabaseConfig,
     pub security: SecurityConfig,
+    pub message_broker: MessageBrokerConfig,
 }
 
 /// API server configuration
@@ -65,6 +66,22 @@ pub struct RecordingConfig {
     pub format: String,
     /// Default retention period in days
     pub retention_days: i32,
+    /// Storage cleanup configuration
+    #[serde(default)]
+    pub cleanup: StorageCleanupConfig,
+}
+
+/// Storage cleanup configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StorageCleanupConfig {
+    /// Whether cleanup is enabled
+    pub enabled: bool,
+    /// Maximum retention period in days
+    pub max_retention_days: i32,
+    /// Maximum disk usage percentage before cleanup
+    pub max_disk_usage_percent: u8,
+    /// Interval in seconds to check for cleanup
+    pub check_interval_secs: u64,
 }
 
 /// Streaming service configuration
@@ -99,7 +116,14 @@ pub struct DatabaseConfig {
 }
 
 fn default_db_url() -> String {
-    "postgres://postgres:postgres@localhost:5432/server".to_string()
+    // Get database connection parameters from environment variables or use defaults
+    let host = std::env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+    let user = std::env::var("POSTGRES_USER").unwrap_or_else(|_| "postgres".to_string());
+    let password = std::env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "postgres".to_string());
+    let db = std::env::var("POSTGRES_DB").unwrap_or_else(|_| "server".to_string());
+
+    format!("postgres://{}:{}@{}:{}/{}", user, password, host, port, db)
 }
 
 fn default_max_connections() -> u32 {
@@ -132,13 +156,100 @@ fn default_password_hash_cost() -> u32 {
     10 // reasonable default for bcrypt
 }
 
+/// Message broker (RabbitMQ) configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MessageBrokerConfig {
+    /// RabbitMQ connection URI
+    #[serde(default = "default_rabbitmq_uri")]
+    pub uri: String,
+    /// Connection pool size
+    #[serde(default = "default_rabbitmq_pool_size")]
+    pub pool_size: u32,
+    /// Exchange name for event publishing
+    #[serde(default = "default_rabbitmq_exchange")]
+    pub exchange: String,
+    /// Dead letter exchange name
+    #[serde(default = "default_rabbitmq_dlx")]
+    pub dead_letter_exchange: String,
+    /// Default message timeout in milliseconds
+    #[serde(default = "default_rabbitmq_timeout")]
+    pub timeout_ms: u64,
+    /// Connection retry attempts
+    #[serde(default = "default_rabbitmq_retry_attempts")]
+    pub retry_attempts: u32,
+    /// Connection retry delay in milliseconds
+    #[serde(default = "default_rabbitmq_retry_delay")]
+    pub retry_delay_ms: u64,
+}
+
+fn default_rabbitmq_uri() -> String {
+    "amqp://guest:guest@localhost:5672/%2f".to_string()
+}
+
+fn default_rabbitmq_pool_size() -> u32 {
+    5
+}
+
+fn default_rabbitmq_exchange() -> String {
+    "gstreamer.events".to_string()
+}
+
+fn default_rabbitmq_dlx() -> String {
+    "gstreamer.events.dlx".to_string()
+}
+
+fn default_rabbitmq_timeout() -> u64 {
+    30000 // 30 seconds
+}
+
+fn default_rabbitmq_retry_attempts() -> u32 {
+    3
+}
+
+fn default_rabbitmq_retry_delay() -> u64 {
+    1000 // 1 second
+}
+
+impl Default for StorageCleanupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_retention_days: 30,
+            max_disk_usage_percent: 80,
+            check_interval_secs: 3600,
+        }
+    }
+}
+
+impl Default for MessageBrokerConfig {
+    fn default() -> Self {
+        Self {
+            uri: default_rabbitmq_uri(),
+            pool_size: default_rabbitmq_pool_size(),
+            exchange: default_rabbitmq_exchange(),
+            dead_letter_exchange: default_rabbitmq_dlx(),
+            timeout_ms: default_rabbitmq_timeout(),
+            retry_attempts: default_rabbitmq_retry_attempts(),
+            retry_delay_ms: default_rabbitmq_retry_delay(),
+        }
+    }
+}
+
+/// Helper to get environment variables with defaults
+fn get_env_var<T: std::str::FromStr>(name: &str, default: T) -> T {
+    std::env::var(name)
+        .ok()
+        .and_then(|val| val.parse::<T>().ok())
+        .unwrap_or(default)
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             api: ApiConfig {
-                address: "0.0.0.0".to_string(),
-                port: 4750,
-                log_level: "info".to_string(),
+                address: std::env::var("API_ADDRESS").unwrap_or_else(|_| "0.0.0.0".to_string()),
+                port: get_env_var("RUST_SERVER_PORT", 4750),
+                log_level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
             },
             onvif: OnvifConfig {
                 discovery_address: "239.255.255.250".to_string(),
@@ -147,11 +258,22 @@ impl Default for Config {
                 db_pool: None,
             },
             recording: RecordingConfig {
-                storage_path: PathBuf::from("./recordings"),
-                max_storage_gb: 500,
-                segment_duration: 600,
-                format: "mkv".to_string(), // Use MKV format by default for all recordings
-                retention_days: 30,
+                storage_path: {
+                    let recordings_dir = PathBuf::from(
+                        std::env::var("RECORDINGS_PATH").unwrap_or_else(|_| "./recordings".to_string())
+                    );
+                    // Create the directory if it doesn't exist
+                    if !recordings_dir.exists() {
+                        let _ = std::fs::create_dir_all(&recordings_dir);
+                    }
+                    // Use absolute path if possible, otherwise use relative
+                    std::fs::canonicalize(&recordings_dir).unwrap_or(recordings_dir)
+                },
+                max_storage_gb: get_env_var("MAX_STORAGE_GB", 500),
+                segment_duration: get_env_var("SEGMENT_DURATION", 30), // 30 seconds
+                format: std::env::var("RECORDING_FORMAT").unwrap_or_else(|_| "mp4".to_string()),
+                retention_days: get_env_var("RETENTION_DAYS", 30),
+                cleanup: StorageCleanupConfig::default(),
             },
             streaming: StreamingConfig {
                 multicast_address_base: "239.0.0.0".to_string(),
@@ -170,6 +292,7 @@ impl Default for Config {
                 jwt_expiration_minutes: 60,
                 password_hash_cost: 10,
             },
+            message_broker: MessageBrokerConfig::default(),
         }
     }
 }
@@ -194,4 +317,3 @@ pub fn load_config(config_path: Option<&Path>) -> Result<Config> {
         None => Ok(Config::default()),
     }
 }
-
