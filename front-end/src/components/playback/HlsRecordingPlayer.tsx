@@ -25,6 +25,8 @@ interface HlsRecordingPlayerProps {
   apiBaseUrl?: string;
   serverUrl?: string;
   playerMode?: 'recording' | 'camera';
+  currentSegment?: number;
+  isSegmentedRecording?: boolean;
 }
 
 /**
@@ -42,7 +44,9 @@ const HlsRecordingPlayer: React.FC<HlsRecordingPlayerProps> = ({
   onClose,
   apiBaseUrl = window.location.origin,
   serverUrl = 'http://localhost:4750',
-  playerMode = 'recording'
+  playerMode = 'recording',
+  currentSegment,
+  isSegmentedRecording = false
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -65,8 +69,16 @@ const HlsRecordingPlayer: React.FC<HlsRecordingPlayerProps> = ({
   const isValidPlayback = playerMode === 'camera' ? !!cameraId : !!recordingId;
   
   // Construct HLS playlist URLs using the on-the-fly HLS endpoints with explicit server URL
-  const masterPlaylistUrl = isValidPlayback ? `${serverUrl}/hls/${playbackId}/playlist?playlist_type=master` : '';
-  const mediaPlaylistUrl = isValidPlayback ? `${serverUrl}/hls/${playbackId}/playlist?playlist_type=media` : '';
+  // Add segment parameter if we're playing a specific segment of a segmented recording
+  const segmentParam = isSegmentedRecording && currentSegment !== undefined ? `&segment=${currentSegment}` : '';
+  
+  const masterPlaylistUrl = isValidPlayback 
+    ? `${serverUrl}/hls/${playbackId}/playlist?playlist_type=master${segmentParam}` 
+    : '';
+    
+  const mediaPlaylistUrl = isValidPlayback 
+    ? `${serverUrl}/hls/${playbackId}/playlist?playlist_type=media${segmentParam}` 
+    : '';
 
   // Use master playlist by default, but fall back to media playlist if needed
   const [hlsPlaylistUrl, setHlsPlaylistUrl] = useState(masterPlaylistUrl);
@@ -75,9 +87,11 @@ const HlsRecordingPlayer: React.FC<HlsRecordingPlayerProps> = ({
   useEffect(() => {
     console.log(`Player mode: ${playerMode}`);
     console.log(`Playback ID: ${playbackId}`);
+    console.log(`Is segmented recording: ${isSegmentedRecording}`);
+    console.log(`Current segment: ${currentSegment !== undefined ? currentSegment : 'N/A'}`);
     console.log(`Master playlist URL: ${masterPlaylistUrl}`);
     console.log(`Media playlist URL: ${mediaPlaylistUrl}`);
-  }, [playerMode, playbackId, masterPlaylistUrl, mediaPlaylistUrl]);
+  }, [playerMode, playbackId, masterPlaylistUrl, mediaPlaylistUrl, isSegmentedRecording, currentSegment]);
   
   // Validate that we have proper IDs
   useEffect(() => {
@@ -91,6 +105,34 @@ const HlsRecordingPlayer: React.FC<HlsRecordingPlayerProps> = ({
       }
     }
   }, [playerMode, cameraId, recordingId, isValidPlayback, error]);
+  
+  // Effect to reload the player when the segment changes
+  useEffect(() => {
+    if (isSegmentedRecording && currentSegment !== undefined) {
+      console.log(`Segment changed to: ${currentSegment}, reloading player`);
+      
+      // Reset loading state
+      setIsLoading(true);
+      setError(null);
+      setHlsRetryCount(0);
+      
+      // Update playlist URL with new segment parameter
+      setHlsPlaylistUrl(masterPlaylistUrl);
+      
+      // Clean up existing HLS instance
+      if (hls) {
+        hls.destroy();
+        setHls(null);
+      }
+      
+      // Reset video element
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.removeAttribute('src');
+        videoRef.current.load();
+      }
+    }
+  }, [currentSegment, isSegmentedRecording, masterPlaylistUrl, hls]);
 
   // Function to retry playback with different settings
   const retryWithDifferentSettings = () => {
@@ -262,6 +304,19 @@ const HlsRecordingPlayer: React.FC<HlsRecordingPlayerProps> = ({
             console.error('Detected possible CORS issue:', data);
             setError('Cross-origin (CORS) error detected. The server may not allow requests from this origin.');
           }
+          
+          // Special handling for segment-specific errors
+          if (isSegmentedRecording && currentSegment !== undefined) {
+            const isSegmentError = 
+              data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
+              (data.response && data.response.code === 404) ||
+              data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR;
+              
+            if (isSegmentError) {
+              console.error(`Error loading segment ${currentSegment}:`, data);
+              setError(`Unable to load segment ${currentSegment}. The segment may be corrupted or unavailable.`);
+            }
+          }
 
           // Handle buffer and codec errors with more resilience
           const isBufferError =
@@ -414,7 +469,9 @@ const HlsRecordingPlayer: React.FC<HlsRecordingPlayerProps> = ({
           
           // Try direct MP4 playback as a fallback
           console.log('Trying direct MP4 playback as fallback');
-          const directVideoUrl = `${serverUrl}/playback/video/${recordingId}`;
+          // Include segment parameter if applicable
+          const segmentQueryParam = isSegmentedRecording && currentSegment !== undefined ? `?segment=${currentSegment}` : '';
+          const directVideoUrl = `${serverUrl}/playback/video/${recordingId}${segmentQueryParam}`;
           video.src = directVideoUrl;
           
           video.addEventListener('loadedmetadata', () => {
@@ -431,7 +488,9 @@ const HlsRecordingPlayer: React.FC<HlsRecordingPlayerProps> = ({
       } else {
         // Try direct MP4 playback for browsers without HLS support
         console.log('HLS not supported, trying direct MP4 playback');
-        const directVideoUrl = `${serverUrl}/playback/video/${recordingId}`;
+        // Include segment parameter if applicable
+        const segmentQueryParam = isSegmentedRecording && currentSegment !== undefined ? `?segment=${currentSegment}` : '';
+        const directVideoUrl = `${serverUrl}/playback/video/${recordingId}${segmentQueryParam}`;
         video.src = directVideoUrl;
         
         video.addEventListener('loadedmetadata', () => {
@@ -757,6 +816,15 @@ const HlsRecordingPlayer: React.FC<HlsRecordingPlayerProps> = ({
               <Text className="font-semibold">End:</Text>
               <Text>{formatDate(endTime)}</Text>
             </div>
+            
+            {/* Segment indicator (if applicable) */}
+            {isSegmentedRecording && currentSegment !== undefined && (
+              <div className="col-span-2 mt-2">
+                <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                  Segment {currentSegment}
+                </Badge>
+              </div>
+            )}
           </div>
         )}
       </div>

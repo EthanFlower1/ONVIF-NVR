@@ -548,7 +548,7 @@ const WebRTCStreamPlayer: React.FC<WebRTCStreamPlayerProps> = ({
       }
     }, 500);
 
-    console.log("CAMERA NAME: ", cameraName)
+    console.log()
     // Return cleanup function
     return () => {
       console.log('Component unmounting, cleaning up WebRTC connections');

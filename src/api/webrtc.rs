@@ -429,14 +429,15 @@ pub async fn process_webrtc_offer(
     );
 
     // Set up connection state monitoring
-    let session_id_mon = request.session_id.clone();
-    let state_mon = Arc::clone(&state);
-    let pc_mon = Arc::clone(&peer_connection);
+    let session_id_mon1 = request.session_id.clone();
+    let state_mon1 = Arc::clone(&state);
+    let pc_mon1 = Arc::clone(&peer_connection);
     
+    // First state change handler
     peer_connection.on_peer_connection_state_change(Box::new(move |connection_state| {
-        let pc_clone = Arc::clone(&pc_mon);
-        let session_id = session_id_mon.clone();
-        let state_clone = Arc::clone(&state_mon);
+        let pc_clone = Arc::clone(&pc_mon1);
+        let session_id = session_id_mon1.clone();
+        let state_clone = Arc::clone(&state_mon1);
         
         Box::pin(async move {
             match connection_state {
@@ -490,10 +491,19 @@ pub async fn process_webrtc_offer(
         })
     }));
 
+    // Set up variables for the second event handler with fresh clones
+    let session_id_mon2 = request.session_id.clone();
+    let state_mon2 = Arc::clone(&state);
+    let pc_mon2 = Arc::clone(&peer_connection);
+    let tee_src_pad_clone = tee_src_pad.clone();
+    let tee_clone = tee.clone();
+    let pipeline_clone = pipeline.clone();
+    let element_suffix_clone = element_suffix.clone();
+
     peer_connection.on_peer_connection_state_change(Box::new(move |connection_state| {
-    let pc_clone = Arc::clone(&pc_mon);
-    let session_id = session_id_mon.clone();
-    let state_clone = Arc::clone(&state_mon);
+    let pc_clone = Arc::clone(&pc_mon2);
+    let session_id = session_id_mon2.clone();
+    let state_clone = Arc::clone(&state_mon2);
     let tee_src_pad = tee_src_pad_clone.clone();
     let tee = tee_clone.clone();
     let pipeline = pipeline_clone.clone();

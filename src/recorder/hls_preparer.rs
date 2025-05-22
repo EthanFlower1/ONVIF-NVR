@@ -690,5 +690,214 @@ impl HlsPreparationService {
         let master_playlist = hls_dir.join("master.m3u8");
         master_playlist.exists()
     }
+    
+    /// Create HLS playlist from existing TS segments (without transcoding)
+    pub async fn create_hls_playlist_from_ts_segments(
+        &self,
+        recording_id: &Uuid,
+        segment_paths: Vec<PathBuf>,
+        target_duration: u32,
+    ) -> Result<PathBuf> {
+        // Get the recording details to add to the playlist metadata
+        let recording = match self.recordings_repo.get_by_id(recording_id).await? {
+            Some(r) => r,
+            None => return Err(anyhow!("Recording not found: {}", recording_id)),
+        };
+        
+        // Get the HLS directory for this recording
+        let hls_dir = self.get_hls_dir_for_recording(recording_id);
+        
+        // Create the directory if it doesn't exist
+        if !hls_dir.exists() {
+            fs::create_dir_all(&hls_dir)?;
+        }
+        
+        // Sort segments by name/path to ensure they're in the correct order
+        let mut sorted_segments = segment_paths.clone();
+        sorted_segments.sort();
+        
+        // Create the playlist content
+        let mut playlist_content = String::new();
+        
+        // Add HLS header
+        playlist_content.push_str("#EXTM3U\n");
+        playlist_content.push_str("#EXT-X-VERSION:3\n");
+        playlist_content.push_str(&format!("#EXT-X-TARGETDURATION:{}\n", target_duration));
+        playlist_content.push_str("#EXT-X-MEDIA-SEQUENCE:0\n");
+        playlist_content.push_str("#EXT-X-PLAYLIST-TYPE:VOD\n");
+        
+        // Add metadata tags if available
+        if let Some(metadata) = &recording.metadata {
+            if let Ok(metadata_obj) = serde_json::from_value::<serde_json::Value>(metadata.clone()) {
+                if let Some(obj) = metadata_obj.as_object() {
+                    if let Some(hls_info) = obj.get("hls") {
+                        if let Some(hls_obj) = hls_info.as_object() {
+                            // Add custom tags for our metadata if present
+                            if let Some(codec) = hls_obj.get("codec") {
+                                if let Some(codec_str) = codec.as_str() {
+                                    playlist_content.push_str(&format!("#EXT-X-STREAM-CODEC:{}\n", codec_str));
+                                }
+                            }
+                            
+                            if let Some(resolution) = hls_obj.get("resolution") {
+                                if let Some(res_str) = resolution.as_str() {
+                                    playlist_content.push_str(&format!("#EXT-X-STREAM-RESOLUTION:{}\n", res_str));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Add segment format info - all segments are MPEG-TS
+        playlist_content.push_str("\n");
+        
+        // Add segments
+        for (index, segment_path) in sorted_segments.iter().enumerate() {
+            let segment_duration = if index == sorted_segments.len() - 1 {
+                // Last segment might be shorter, try to calculate its actual duration
+                let remaining_duration = recording.duration as f64 - (index as f64 * target_duration as f64);
+                if remaining_duration > 0.0 && remaining_duration < target_duration as f64 {
+                    remaining_duration
+                } else {
+                    target_duration as f64
+                }
+            } else {
+                target_duration as f64
+            };
+            
+            // Get segment filename for the playlist
+            let segment_filename = match segment_path.file_name() {
+                Some(name) => name.to_string_lossy().to_string(),
+                None => continue, // Skip segments with invalid filenames
+            };
+            
+            // Add segment info to the playlist
+            playlist_content.push_str(&format!("#EXTINF:{:.6},\n", segment_duration));
+            playlist_content.push_str(&segment_filename);
+            playlist_content.push_str("\n");
+            
+            // Copy the segment file to the HLS directory if it's not already there
+            let dest_path = hls_dir.join(&segment_filename);
+            if !dest_path.exists() && segment_path.exists() {
+                if let Err(e) = fs::copy(segment_path, &dest_path) {
+                    warn!("Failed to copy segment file: {}", e);
+                    // Continue anyway - the segment might already be in place
+                }
+            }
+        }
+        
+        // Add end marker
+        playlist_content.push_str("#EXT-X-ENDLIST\n");
+        
+        // Write the playlist file
+        let playlist_path = hls_dir.join("playlist.m3u8");
+        fs::write(&playlist_path, playlist_content)?;
+        
+        // Create a master playlist if it doesn't exist
+        let master_playlist_path = hls_dir.join("master.m3u8");
+        if !master_playlist_path.exists() {
+            let resolution = recording.resolution.clone();
+            let master_content = format!(
+                "#EXTM3U\n\
+                #EXT-X-VERSION:3\n\
+                #EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION={}\n\
+                playlist.m3u8\n",
+                resolution
+            );
+            
+            fs::write(&master_playlist_path, master_content)?;
+        }
+        
+        Ok(hls_dir)
+    }
+    
+    /// Generate HLS playlists directly from a parent recording with TS segments
+    pub async fn generate_hls_for_segmented_recording(
+        &self,
+        recording_id: &Uuid,
+    ) -> Result<PathBuf> {
+        // Get the recording details
+        let recording = match self.recordings_repo.get_by_id(recording_id).await? {
+            Some(r) => r,
+            None => return Err(anyhow!("Recording not found: {}", recording_id)),
+        };
+        
+        // Check if this recording has segments
+        if recording.segment_id.is_some() {
+            return Err(anyhow!("This is a segment, not a parent recording. Use the parent_recording_id."));
+        }
+        
+        // Get all segments for this recording
+        let query = crate::db::models::recording_models::RecordingSearchQuery {
+            camera_ids: None,
+            stream_ids: None,
+            start_time: None,
+            end_time: None,
+            event_types: None,
+            schedule_id: None,
+            min_duration: None,
+            segment_id: None,
+            parent_recording_id: Some(recording.id),
+            is_segment: Some(true),
+            limit: None,
+            offset: None,
+        };
+        
+        let segments = self.recordings_repo.search(&query).await?;
+        
+        if segments.is_empty() {
+            return Err(anyhow!("No segments found for this recording"));
+        }
+        
+        // Sort segments by segment_id to ensure correct order
+        let mut sorted_segments = segments.clone();
+        sorted_segments.sort_by(|a, b| a.segment_id.unwrap_or(0).cmp(&b.segment_id.unwrap_or(0)));
+        
+        // Extract segment paths
+        let segment_paths: Vec<PathBuf> = sorted_segments
+            .iter()
+            .map(|s| s.file_path.clone())
+            .collect();
+        
+        // Get the target duration from recording metadata if available
+        let target_duration = if let Some(metadata) = &recording.metadata {
+            if let Ok(metadata_obj) = serde_json::from_value::<serde_json::Value>(metadata.clone()) {
+                if let Some(obj) = metadata_obj.as_object() {
+                    if let Some(hls_info) = obj.get("hls") {
+                        if let Some(hls_obj) = hls_info.as_object() {
+                            if let Some(duration) = hls_obj.get("segment_duration_seconds") {
+                                if let Some(duration_num) = duration.as_i64() {
+                                    duration_num as u32
+                                } else {
+                                    4 // Default to 4 seconds
+                                }
+                            } else {
+                                4
+                            }
+                        } else {
+                            4
+                        }
+                    } else {
+                        4
+                    }
+                } else {
+                    4
+                }
+            } else {
+                4
+            }
+        } else {
+            4
+        };
+        
+        // Create the HLS playlist from the segments
+        self.create_hls_playlist_from_ts_segments(
+            recording_id,
+            segment_paths,
+            target_duration,
+        ).await
+    }
 }
 

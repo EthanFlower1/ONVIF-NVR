@@ -3,6 +3,7 @@ use crate::db::repositories::cameras::CamerasRepository;
 use anyhow::{anyhow, Result};
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use gstreamer_rtsp::RTSPLowerTrans;
 use log::{info, warn};
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -107,8 +108,11 @@ impl StreamManager {
         let rtspsrc = gst::ElementFactory::make("rtspsrc")
             .property("location", &source.uri)
             .property("latency", &2000u32)
+            .property("ntp-sync", &true)
+            .property("protocols", RTSPLowerTrans::UDP) // Force TCP for RTP transport
             .property("onvif-mode", &true)
             .build()?;
+
         pipeline.add(&rtspsrc)?;
         // 4) Create three tees and add them
         let video_tee = gst::ElementFactory::make("tee")

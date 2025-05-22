@@ -14,17 +14,20 @@ use gstreamer::{self as gst, ClockTime, PadProbeData, PadProbeReturn, PadProbeTy
 use gstreamer::glib;
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use serde_json::json;
 use sqlx::PgPool;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
+use std::sync::Mutex as StdMutex; // Use std::sync::Mutex with a different name
 
 #[derive(Clone)]
 pub struct RecordingManager {
@@ -43,7 +46,6 @@ pub struct ActiveRecordingElements {
     pub pipeline: gst::Pipeline,
     pub video_tee_pad: gst::Pad,
     pub video_elements_chain: Option<Vec<gst::Element>>, // Updated
-    pub muxer: gst::Element,
     pub splitmuxsink: gst::Element,
     pub splitmuxsink_video_pad: gst::Pad, // Pad to which final video processor links
     pub audio_tee_pad: Option<gst::Pad>,
@@ -292,13 +294,9 @@ impl RecordingManager {
         //-----------------------------------------------------------------------------
         // MUXER & SPLITMUXSINK SETUP
         //-----------------------------------------------------------------------------
-        let muxer = gst::ElementFactory::make("mp4mux") // or mp4mux if onvifmp4mux not available/needed
-            .name(format!("mp4mux_{}", element_suffix))
-            .build()?;
 
         let splitmuxsink = gst::ElementFactory::make("splitmuxsink")
             .name(format!("splitmuxsink_{}", element_suffix))
-            .property("muxer", &muxer)
             .property(
                 "location",
                 format!(
@@ -397,6 +395,7 @@ impl RecordingManager {
                 }
                 if let Some(buffer) = first_sample.buffer() {
                     pts_val = buffer.pts().map(|pts| pts.nseconds());
+                    info!("Got PTS Value from buffer===================================================================> : {:?}", pts_val)
                     // dts_val = buffer.dts().map(|dts| dts.nseconds());
                     // duration_val = buffer.duration().map(|dur| dur.nseconds());
                 }
@@ -479,45 +478,28 @@ impl RecordingManager {
                     .build()?;
                 let parse = gst::ElementFactory::make("h264parse")
                     .name(format!("record_video_parse_h264_{}", element_suffix))
+                    .property("config-interval", -1)
                     .build()?;
 
                 let timestamper = gst::ElementFactory::make("h264timestamper")
                     .name(format!("record_video_timestamper_h264_{}", element_suffix))
                     .build()?;
 
-let parse_clone = parse.clone();
-parse
-    .static_pad("src")
-    .unwrap()
-    .add_probe(PadProbeType::BUFFER, move |_pad, info| {
-        if let Some(PadProbeData::Buffer(buffer)) = &mut info.data {
-            // Get a mutable buffer to modify
-            let buffer_mut = buffer.make_mut();
-            
-            // Check if PTS is missing
-            if buffer_mut.pts().is_none() {
-                // Get the parse element's current running time
-                if let Some(running_time) = parse.current_running_time() {
-                    // Set both PTS and DTS
-                    buffer_mut.set_pts(Some(running_time));
-                    buffer_mut.set_dts(Some(running_time));
-                    
-                    debug!("Set missing timestamp to element running time: {:?}", running_time);
-                } else {
-                    warn!("Could not get element running time");
-                }
-            } else {
-                // Optional: log existing timestamp for debugging
-                debug!("Buffer already has timestamp: {:?}", buffer_mut.pts());
-            }
-        }
-        PadProbeReturn::Pass
-    });
+// Thread-safe state to hold the last known valid PTS
+let last_valid_pts: Arc<StdMutex<Option<ClockTime>>> = Arc::new(StdMutex::new(None));
+// Create a clone of parse for adding to the pipeline
+let parse_for_pipeline = parse.clone();
+
+// Create another clone for the probe closure
+let parse_for_probe = parse.clone();
+let last_valid_pts_clone = last_valid_pts.clone();
+
 
                 video_elements_to_add.push(depay);
-                video_elements_to_add.push(parse_clone);
-                video_elements_to_add.push(timestamper.clone());
-                final_video_processor_for_muxer = Some(timestamper);
+                video_elements_to_add.push(parse_for_pipeline);
+                let timestamper_clone = timestamper.clone();
+                video_elements_to_add.push(timestamper);
+                final_video_processor_for_muxer = Some(timestamper_clone);
                 info!("Video chain (H264): ... ! queue ! rtph264depay ! h264parse ! h264timestamper ! muxer");
             }
             "h265" | "hevc" => {
@@ -531,40 +513,14 @@ parse
                 let timestamper = gst::ElementFactory::make("h265timestamper")
                     .name(format!("record_video_timestamper_h265_{}", element_suffix))
                     .build()?;
-let parse_clone = parse.clone();
-parse
-    .static_pad("src")
-    .unwrap()
-    .add_probe(PadProbeType::BUFFER, move |_pad, info| {
-        if let Some(PadProbeData::Buffer(buffer)) = &mut info.data {
-            // Get a mutable buffer to modify
-            let buffer_mut = buffer.make_mut();
-            
-            // Check if PTS is missing
-            if buffer_mut.pts().is_none() {
-                // Get the parse element's current running time
-                if let Some(running_time) = parse.current_running_time() {
-                    // Set both PTS and DTS
-                    buffer_mut.set_pts(Some(running_time));
-                    buffer_mut.set_dts(Some(running_time));
-                    
-                    debug!("Set missing timestamp to element running time: {:?}", running_time);
-                } else {
-                    warn!("Could not get element running time");
-                }
-            } else {
-                // Optional: log existing timestamp for debugging
-                debug!("Buffer already has timestamp: {:?}", buffer_mut.pts());
-            }
-        }
-        PadProbeReturn::Pass
-    });
+
 
                 video_elements_to_add.push(depay);
-                video_elements_to_add.push(parse_clone.clone());
+                video_elements_to_add.push(parse);
+                let timestamper_clone = timestamper.clone();
                 video_elements_to_add.push(timestamper);
-                final_video_processor_for_muxer = Some(parse_clone);
-                info!("Video chain (H265/HEVC): ... ! queue ! rtph265depay ! h265parse ! muxer");
+                final_video_processor_for_muxer = Some(timestamper_clone);
+                info!("Video chain (H265/HEVC): ... ! queue ! rtph265depay ! h265parse ! h265timestamper ! muxer");
             }
             "jpeg" | "mjpeg" => {
                 // Note: Muxing JPEG into standard MP4 is uncommon.
@@ -694,7 +650,7 @@ parse
         //-----------------------------------------------------------------------------
         // Add muxer and splitmuxsink first (already built)
         pipeline
-            .add_many(&[&muxer, &splitmuxsink])
+            .add_many(&[&splitmuxsink])
             .map_err(|e| anyhow!("Failed to add muxer/splitmuxsink to pipeline: {:?}", e))?;
         info!("Added muxer and splitmuxsink to pipeline.");
 
@@ -897,9 +853,6 @@ parse
             info!("Synced states of all new audio recording elements.");
         }
 
-        muxer
-            .sync_state_with_parent()
-            .map_err(|e| anyhow!("Failed to sync muxer state: {:?}", e))?;
         splitmuxsink
             .sync_state_with_parent()
             .map_err(|e| anyhow!("Failed to sync splitmuxsink state: {:?}", e))?;
@@ -953,7 +906,6 @@ parse
             } else {
                 None
             },
-            muxer: muxer.clone(),
             splitmuxsink: splitmuxsink.clone(),
             splitmuxsink_video_pad: splitmux_video_sink_pad, // Stored from linking step
 

@@ -260,7 +260,8 @@ impl Default for Config {
             recording: RecordingConfig {
                 storage_path: {
                     let recordings_dir = PathBuf::from(
-                        std::env::var("RECORDINGS_PATH").unwrap_or_else(|_| "./recordings".to_string())
+                        std::env::var("RECORDINGS_PATH")
+                            .unwrap_or_else(|_| "./recordings".to_string()),
                     );
                     // Create the directory if it doesn't exist
                     if !recordings_dir.exists() {
